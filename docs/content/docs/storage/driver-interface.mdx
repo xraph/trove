@@ -1,0 +1,344 @@
+---
+title: "Driver Interface"
+description: "How to implement a custom Trove storage driver, capability interfaces, and the conformance test suite."
+---
+
+## Core Interface
+
+Every Trove storage backend implements the `driver.Driver` interface:
+
+```go
+import "github.com/xraph/trove/driver"
+
+type Driver interface {
+    // Identity
+    Name() string
+    Open(ctx context.Context, dsn string, opts ...Option) error
+    Close(ctx context.Context) error
+    Ping(ctx context.Context) error
+
+    // Object Operations
+    Put(ctx context.Context, bucket, key string, r io.Reader, opts ...PutOption) (*ObjectInfo, error)
+    Get(ctx context.Context, bucket, key string, opts ...GetOption) (*ObjectReader, error)
+    Delete(ctx context.Context, bucket, key string, opts ...DeleteOption) error
+    Head(ctx context.Context, bucket, key string) (*ObjectInfo, error)
+    List(ctx context.Context, bucket string, opts ...ListOption) (*ObjectIterator, error)
+    Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string, opts ...CopyOption) (*ObjectInfo, error)
+
+    // Bucket Operations
+    CreateBucket(ctx context.Context, name string, opts ...BucketOption) error
+    DeleteBucket(ctx context.Context, name string) error
+    ListBuckets(ctx context.Context) ([]BucketInfo, error)
+}
+```
+
+## Core Types
+
+### ObjectInfo
+
+Returned by `Put`, `Head`, and `Copy`:
+
+```go
+type ObjectInfo struct {
+    Key          string
+    Size         int64
+    ContentType  string
+    ETag         string
+    LastModified time.Time
+    Metadata     map[string]string
+    VersionID    string
+    StorageClass string
+}
+```
+
+### ObjectReader
+
+Returned by `Get` -- wraps content with metadata:
+
+```go
+type ObjectReader struct {
+    io.ReadCloser
+    Info *ObjectInfo
+}
+```
+
+### ObjectIterator
+
+Returned by `List` -- provides cursor-based pagination:
+
+```go
+iter, _ := drv.List(ctx, "bucket", driver.WithPrefix("photos/"))
+
+// Iterate one at a time
+for {
+    obj, err := iter.Next(ctx)
+    if err == io.EOF {
+        break
+    }
+    fmt.Println(obj.Key)
+}
+
+// Or collect all at once
+objects, _ := iter.All(ctx)
+```
+
+### BucketInfo
+
+```go
+type BucketInfo struct {
+    Name      string
+    CreatedAt time.Time
+}
+```
+
+## Functional Options
+
+Operations accept typed functional options:
+
+```go
+// Put options
+driver.WithContentType("image/png")
+driver.WithMetadata(map[string]string{"author": "alice"})
+driver.WithTags(map[string]string{"env": "prod"})
+driver.WithStorageClass("GLACIER")
+
+// Get options
+driver.WithRange(0, 1024)     // byte range
+driver.WithVersionID("v123")  // specific version
+
+// List options
+driver.WithPrefix("photos/")
+driver.WithDelimiter("/")
+driver.WithMaxKeys(100)
+driver.WithCursor("next-page-token")
+```
+
+## DSN Parsing
+
+Drivers typically parse a DSN string in their `Open` method. The `driver` package provides a parser:
+
+```go
+import "github.com/xraph/trove/driver"
+
+cfg, err := driver.ParseDSN("s3://access:secret@us-east-1/my-bucket?endpoint=http://localhost:9000")
+// cfg.Scheme = "s3"
+// cfg.User = "access"
+// cfg.Password = "secret"
+// cfg.Host = "us-east-1"
+// cfg.Path = "/my-bucket"
+// cfg.Params = {"endpoint": "http://localhost:9000"}
+```
+
+## Driver Registry
+
+Drivers can register themselves in a global registry for DSN-based discovery:
+
+```go
+import "github.com/xraph/trove/driver"
+
+func init() {
+    driver.Register("mydriver", func() driver.Driver {
+        return &MyDriver{}
+    })
+}
+
+// Later, look up by name
+factory, ok := driver.Lookup("mydriver")
+if ok {
+    drv := factory()
+    drv.Open(ctx, dsn)
+}
+```
+
+## Capability Interfaces
+
+Drivers can optionally implement extended interfaces for advanced features. Check at runtime with type assertions:
+
+### MultipartDriver
+
+```go
+type MultipartDriver interface {
+    Driver
+    InitiateMultipart(ctx context.Context, bucket, key string, opts ...PutOption) (uploadID string, err error)
+    UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, r io.Reader) (*PartInfo, error)
+    CompleteMultipart(ctx context.Context, bucket, key, uploadID string, parts []PartInfo) (*ObjectInfo, error)
+    AbortMultipart(ctx context.Context, bucket, key, uploadID string) error
+}
+```
+
+### PresignDriver
+
+```go
+type PresignDriver interface {
+    Driver
+    PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+    PresignPut(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+}
+```
+
+### VersioningDriver
+
+```go
+type VersioningDriver interface {
+    Driver
+    ListVersions(ctx context.Context, bucket, key string) ([]VersionInfo, error)
+    GetVersion(ctx context.Context, bucket, key, versionID string) (*ObjectReader, error)
+    DeleteVersion(ctx context.Context, bucket, key, versionID string) error
+    RestoreVersion(ctx context.Context, bucket, key, versionID string) (*ObjectInfo, error)
+}
+```
+
+### NotificationDriver
+
+```go
+type NotificationDriver interface {
+    Driver
+    Watch(ctx context.Context, bucket string, opts ...WatchOption) (<-chan ObjectEvent, error)
+}
+```
+
+### LifecycleDriver
+
+```go
+type LifecycleDriver interface {
+    Driver
+    SetLifecycle(ctx context.Context, bucket string, rules []LifecycleRule) error
+    GetLifecycle(ctx context.Context, bucket string) ([]LifecycleRule, error)
+}
+```
+
+### Checking Capabilities
+
+```go
+if mp, ok := drv.(driver.MultipartDriver); ok {
+    uploadID, _ := mp.InitiateMultipart(ctx, "bucket", "large-file.zip")
+    // ...
+}
+
+if ps, ok := drv.(driver.PresignDriver); ok {
+    url, _ := ps.PresignGet(ctx, "bucket", "file.pdf", 15*time.Minute)
+    fmt.Println("Download URL:", url)
+}
+```
+
+## Building a Custom Driver
+
+Here's a skeleton for implementing a custom driver:
+
+```go
+package mydriver
+
+import (
+    "context"
+    "io"
+
+    "github.com/xraph/trove/driver"
+)
+
+type MyDriver struct {
+    // your backend client, connection pool, etc.
+}
+
+func New() *MyDriver {
+    return &MyDriver{}
+}
+
+func (d *MyDriver) Name() string { return "mydriver" }
+
+func (d *MyDriver) Open(ctx context.Context, dsn string, opts ...driver.Option) error {
+    cfg, err := driver.ParseDSN(dsn)
+    if err != nil {
+        return err
+    }
+    // Initialize your backend connection using cfg...
+    return nil
+}
+
+func (d *MyDriver) Close(ctx context.Context) error {
+    // Clean up resources
+    return nil
+}
+
+func (d *MyDriver) Ping(ctx context.Context) error {
+    // Verify connectivity
+    return nil
+}
+
+func (d *MyDriver) Put(ctx context.Context, bucket, key string, r io.Reader, opts ...driver.PutOption) (*driver.ObjectInfo, error) {
+    // Store the object...
+    return &driver.ObjectInfo{Key: key}, nil
+}
+
+// Implement remaining methods: Get, Delete, Head, List, Copy,
+// CreateBucket, DeleteBucket, ListBuckets
+```
+
+## Conformance Test Suite
+
+Every driver **must** pass the conformance test suite to be considered compliant. The `trovetest` package provides `RunDriverSuite`, which tests all required behaviors:
+
+```go
+package mydriver_test
+
+import (
+    "testing"
+
+    "github.com/xraph/trove/driver"
+    "github.com/xraph/trove/trovetest"
+)
+
+func TestMyDriverConformance(t *testing.T) {
+    trovetest.RunDriverSuite(t, func(t *testing.T) driver.Driver {
+        t.Helper()
+        drv := mydriver.New()
+        // Open with a test-appropriate DSN
+        drv.Open(context.Background(), "mydriver://test")
+        return drv
+    })
+}
+```
+
+The suite covers:
+
+| Category | Tests |
+|----------|-------|
+| **Bucket** | Create, CreateDuplicate, Delete, DeleteNotFound, List |
+| **Put/Get** | PutAndGet, Overwrite, WithMetadata, WithContentType, BucketNotFound, ObjectNotFound, LargeObject (1MB) |
+| **Delete** | Existing, NonExistent |
+| **Head** | Existing, NonExistent |
+| **List** | Empty, Multiple, WithPrefix, Pagination |
+| **Copy** | WithinBucket, AcrossBuckets, SourceNotFound |
+| **Concurrency** | ConcurrentPuts (100 goroutines), ConcurrentReads (100 goroutines) |
+| **Ping** | Connectivity check |
+
+## Test Utilities
+
+The `trovetest` package also provides helpers:
+
+```go
+// Create test data
+key, reader := trovetest.TestObject("test.txt", []byte("hello"))
+
+// Generate random bytes
+data := trovetest.RandomData(1024 * 1024) // 1MB
+
+// Assert object metadata matches
+trovetest.AssertObjectEquals(t, expected, actual)
+
+// Read all content from an ObjectReader
+content := trovetest.ReadAll(t, reader)
+```
+
+### MockDriver
+
+For unit testing code that depends on `driver.Driver`:
+
+```go
+mock := &trovetest.MockDriver{
+    NameFunc: func() string { return "mock" },
+    PutFunc: func(ctx context.Context, bucket, key string, r io.Reader, opts ...driver.PutOption) (*driver.ObjectInfo, error) {
+        return &driver.ObjectInfo{Key: key, Size: 42}, nil
+    },
+    // Set other function fields as needed...
+}
+```

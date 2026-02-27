@@ -1,0 +1,200 @@
+---
+title: "Azure Driver"
+description: "Azure Blob Storage driver with block blob uploads, SAS URLs, and byte-range reads."
+---
+
+The Azure driver stores objects in Azure Blob Storage. It implements the core `driver.Driver` interface plus `MultipartDriver`, `PresignDriver`, and `RangeDriver` capability interfaces.
+
+## Installation
+
+The Azure driver has its own Go module to isolate the Azure SDK dependency:
+
+```bash
+go get github.com/xraph/trove/drivers/azuredriver
+```
+
+## Usage
+
+```go
+import (
+    "context"
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/azuredriver"
+)
+
+ctx := context.Background()
+
+// Create and open the driver.
+drv := azuredriver.New()
+err := drv.Open(ctx, "azure://myaccount/mycontainer?key=mykey123")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use with Trove.
+t, err := trove.Open(drv)
+```
+
+### Connection String
+
+```go
+drv := azuredriver.New()
+err := drv.Open(ctx, "azure://myaccount/mycontainer?connection_string=DefaultEndpointsProtocol=https;AccountName=...")
+```
+
+### Custom Endpoint (Azurite)
+
+```go
+drv := azuredriver.New()
+err := drv.Open(ctx, "azure://devstoreaccount1/testcontainer?endpoint=http://127.0.0.1:10000/devstoreaccount1")
+```
+
+## DSN Format
+
+```
+azure://ACCOUNT_NAME/CONTAINER?key=ACCESS_KEY
+azure://ACCOUNT_NAME/CONTAINER?connection_string=CONN_STRING
+azure://ACCOUNT_NAME/CONTAINER?endpoint=http://127.0.0.1:10000/ACCOUNT_NAME
+```
+
+| Component | Description |
+|-----------|-------------|
+| `ACCOUNT_NAME` | Azure storage account name |
+| `CONTAINER` | Default container name |
+| `key` | Storage account access key |
+| `connection_string` | Full Azure connection string (takes priority over other auth methods) |
+| `endpoint` | Override endpoint URL (for Azurite emulator) |
+
+## Capabilities
+
+The Azure driver implements these capability interfaces:
+
+### MultipartDriver
+
+Upload large objects using Azure block blob staging:
+
+```go
+if mp, ok := t.Driver().(driver.MultipartDriver); ok {
+    uploadID, _ := mp.InitiateMultipart(ctx, "container", "large-file.zip",
+        driver.WithContentType("application/zip"),
+    )
+
+    part1, _ := mp.UploadPart(ctx, "container", "large-file.zip", uploadID, 1, chunk1Reader)
+    part2, _ := mp.UploadPart(ctx, "container", "large-file.zip", uploadID, 2, chunk2Reader)
+
+    info, _ := mp.CompleteMultipart(ctx, "container", "large-file.zip", uploadID,
+        []driver.PartInfo{*part1, *part2},
+    )
+}
+```
+
+Azure multipart uploads work by staging blocks with `StageBlock()` and committing them with `CommitBlockList()`.
+
+### PresignDriver
+
+Generate SAS URLs for direct client access:
+
+```go
+if ps, ok := t.Driver().(driver.PresignDriver); ok {
+    downloadURL, _ := ps.PresignGet(ctx, "container", "file.pdf", 15*time.Minute)
+    uploadURL, _ := ps.PresignPut(ctx, "container", "upload.zip", time.Hour)
+}
+```
+
+SAS URL generation requires shared key credentials (account key).
+
+### RangeDriver
+
+Read specific byte ranges:
+
+```go
+if rd, ok := t.Driver().(driver.RangeDriver); ok {
+    reader, _ := rd.GetRange(ctx, "container", "video.mp4", 1000, 1000)
+    defer reader.Close()
+}
+```
+
+## API
+
+### Constructor
+
+```go
+func New() *AzureDriver
+```
+
+Creates a new Azure driver instance.
+
+### Client
+
+```go
+func (d *AzureDriver) Client() *azblob.Client
+```
+
+Returns the underlying `*azblob.Client` for advanced Azure Blob operations.
+
+### Unwrap
+
+```go
+func Unwrap(accessor interface{ Driver() driver.Driver }) *AzureDriver
+```
+
+Extract the `*AzureDriver` from a Trove handle:
+
+```go
+azdrv := azuredriver.Unwrap(troveInstance)
+if azdrv != nil {
+    raw := azdrv.Client()
+}
+```
+
+### Driver Registration
+
+The Azure driver auto-registers via `init()`:
+
+```go
+factory, ok := driver.Lookup("azure")
+drv := factory()
+```
+
+## Azurite Setup for Development
+
+Run Azurite locally with Docker:
+
+```bash
+docker run -d --name azurite \
+  -p 10000:10000 \
+  mcr.microsoft.com/azure-storage/azurite \
+  azurite-blob --blobHost 0.0.0.0
+```
+
+Then connect using the well-known development account:
+
+```go
+drv := azuredriver.New()
+drv.Open(ctx, "azure://devstoreaccount1/testcontainer?key=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==&endpoint=http://127.0.0.1:10000/devstoreaccount1")
+```
+
+## Integration Tests
+
+```bash
+# Start Azurite
+docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0
+
+# Run integration tests
+cd drivers/azuredriver
+go test -tags integration -v ./...
+```
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AZURE_ENDPOINT` | `http://127.0.0.1:10000/devstoreaccount1` | Azure Blob endpoint |
+| `AZURE_ACCOUNT_NAME` | `devstoreaccount1` | Storage account name |
+| `AZURE_ACCOUNT_KEY` | Azurite dev key | Storage account key |
+
+## Limitations
+
+- SAS URL generation requires shared key credentials (not available with connection strings lacking a key)
+- Block blob staging is limited to 50,000 blocks per blob
+- Container names must be 3-63 characters, lowercase letters, numbers, and hyphens

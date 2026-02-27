@@ -1,0 +1,144 @@
+---
+title: "Content-Addressable Storage"
+description: "Automatic deduplication, integrity verification, and garbage collection with content-addressable storage."
+---
+
+The CAS (Content-Addressable Storage) engine stores objects under their content hash. Identical content is stored once regardless of how many keys reference it, providing automatic deduplication and integrity verification.
+
+## Quick Start
+
+```go
+import (
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/cas"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+drv := memdriver.New()
+t, _ := trove.Open(drv,
+    trove.WithCAS(cas.AlgSHA256),
+)
+defer t.Close(ctx)
+
+// Store content — returns the content hash.
+hash, info, err := t.CAS().Store(ctx, strings.NewReader("hello, world!"))
+// hash = "sha256:315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3"
+
+// Retrieve by hash.
+reader, err := t.CAS().Retrieve(ctx, hash)
+data, _ := io.ReadAll(reader)
+reader.Close()
+```
+
+## Hash Algorithms
+
+Three algorithms are available:
+
+| Algorithm | Constant | Properties |
+|-----------|----------|------------|
+| SHA-256 | `cas.AlgSHA256` | Default. Cryptographic, widely compatible. |
+| BLAKE3 | `cas.AlgBlake3` | Faster than SHA-256, modern cryptographic hash. |
+| XXHash | `cas.AlgXXHash` | Non-cryptographic, fastest. Use when integrity is sufficient. |
+
+Hashes are formatted as `"algorithm:hex"`, e.g., `sha256:315f5bdb...`.
+
+## Deduplication
+
+When identical content is stored twice, the second `Store()` increments the reference count instead of writing a duplicate:
+
+```go
+hash1, _, _ := cas.Store(ctx, bytes.NewReader(data))
+hash2, _, _ := cas.Store(ctx, bytes.NewReader(data))
+
+// hash1 == hash2, only one copy stored
+// Reference count = 2
+```
+
+## Pinning
+
+Pin objects to protect them from garbage collection:
+
+```go
+// Pin prevents GC from removing this hash.
+cas.Pin(ctx, hash)
+
+// Unpin allows GC to collect it (if ref count is 0).
+cas.Unpin(ctx, hash)
+```
+
+## Garbage Collection
+
+GC removes objects with `ref_count = 0` and `pinned = false`:
+
+```go
+result, err := t.CAS().GC(ctx)
+fmt.Printf("Scanned: %d, Deleted: %d, Freed: %d bytes\n",
+    result.Scanned, result.Deleted, result.FreedBytes)
+```
+
+The GC process:
+1. Lists all unpinned entries with zero references
+2. Deletes the object from the underlying storage driver
+3. Removes the entry from the index
+4. Reports errors per-entry without aborting the run
+
+## Index
+
+The CAS index maps content hashes to storage locations. The default in-memory index works for single-process deployments. For production, use a database-backed index via the extension module.
+
+```go
+// Custom index implementation.
+type Index interface {
+    Get(ctx context.Context, hash string) (*Entry, error)
+    Put(ctx context.Context, entry *Entry) error
+    Delete(ctx context.Context, hash string) error
+    IncrementRef(ctx context.Context, hash string) error
+    DecrementRef(ctx context.Context, hash string) error
+    Pin(ctx context.Context, hash string) error
+    Unpin(ctx context.Context, hash string) error
+    ListUnpinned(ctx context.Context) ([]*Entry, error)
+}
+```
+
+Each entry tracks:
+
+```go
+type Entry struct {
+    Hash     string // content hash ("sha256:...")
+    Bucket   string // storage bucket
+    Key      string // storage key
+    Size     int64  // content size in bytes
+    RefCount int    // number of references
+    Pinned   bool   // protected from GC
+}
+```
+
+## Configuration
+
+```go
+// Set the hash algorithm.
+cas.New(drv, cas.WithAlgorithm(cas.AlgBlake3))
+
+// Use a custom index.
+cas.New(drv, cas.WithIndex(myDatabaseIndex))
+
+// Store in a different bucket.
+cas.New(drv, cas.WithBucket("content-store"))
+```
+
+## CAS + Dedup Middleware
+
+For full deduplication, combine the dedup middleware with CAS:
+
+```go
+t, _ := trove.Open(drv,
+    trove.WithCAS(cas.AlgSHA256),
+    trove.WithMiddleware(dedup.New(
+        dedup.WithOnDuplicate(func(ctx context.Context, key, hash string) {
+            log.Printf("duplicate: %s -> %s", key, hash)
+        }),
+    )),
+)
+```
+
+The dedup middleware detects duplicates and reports them. CAS handles the actual storage-level deduplication.

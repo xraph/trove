@@ -1,0 +1,202 @@
+---
+title: "GCS Driver"
+description: "Google Cloud Storage driver with multipart uploads, pre-signed URLs, and byte-range reads."
+---
+
+The GCS driver stores objects in Google Cloud Storage. It implements the core `driver.Driver` interface plus `MultipartDriver`, `PresignDriver`, and `RangeDriver` capability interfaces.
+
+## Installation
+
+The GCS driver has its own Go module to isolate the Google Cloud SDK dependency:
+
+```bash
+go get github.com/xraph/trove/drivers/gcsdriver
+```
+
+## Usage
+
+```go
+import (
+    "context"
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/gcsdriver"
+)
+
+ctx := context.Background()
+
+// Create and open the driver.
+drv := gcsdriver.New()
+err := drv.Open(ctx, "gcs://my-project/my-bucket")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use with Trove.
+t, err := trove.Open(drv)
+```
+
+### Custom Endpoint (Emulator)
+
+```go
+drv := gcsdriver.New()
+err := drv.Open(ctx, "gcs://my-project/my-bucket?endpoint=http://localhost:4443")
+```
+
+### With Credentials File
+
+```go
+drv := gcsdriver.New()
+err := drv.Open(ctx, "gcs://my-project/my-bucket?credentials=/path/to/service-account.json")
+```
+
+## DSN Format
+
+```
+gcs://PROJECT_ID/BUCKET
+gcs://PROJECT_ID/BUCKET?credentials=/path/to/key.json&endpoint=http://localhost:4443
+```
+
+| Component | Description |
+|-----------|-------------|
+| `PROJECT_ID` | Google Cloud project ID |
+| `BUCKET` | Default bucket name |
+| `credentials` | Path to service account JSON key file. Omit to use Application Default Credentials |
+| `endpoint` | Override GCS endpoint URL (for emulators like `fake-gcs-server`) |
+
+Driver options can also override DSN values:
+
+```go
+drv.Open(ctx, "gcs://project/bucket",
+    driver.WithEndpoint("http://localhost:4443"),
+)
+```
+
+## Capabilities
+
+The GCS driver implements these capability interfaces beyond the core `driver.Driver`:
+
+### MultipartDriver
+
+Upload large objects using GCS compose operations:
+
+```go
+if mp, ok := t.Driver().(driver.MultipartDriver); ok {
+    uploadID, _ := mp.InitiateMultipart(ctx, "bucket", "large-file.zip",
+        driver.WithContentType("application/zip"),
+    )
+
+    part1, _ := mp.UploadPart(ctx, "bucket", "large-file.zip", uploadID, 1, chunk1Reader)
+    part2, _ := mp.UploadPart(ctx, "bucket", "large-file.zip", uploadID, 2, chunk2Reader)
+
+    info, _ := mp.CompleteMultipart(ctx, "bucket", "large-file.zip", uploadID,
+        []driver.PartInfo{*part1, *part2},
+    )
+}
+```
+
+GCS multipart uploads work by uploading parts as temporary objects and composing them into the final object.
+
+### PresignDriver
+
+Generate signed URLs for direct client uploads/downloads:
+
+```go
+if ps, ok := t.Driver().(driver.PresignDriver); ok {
+    downloadURL, _ := ps.PresignGet(ctx, "bucket", "file.pdf", 15*time.Minute)
+    uploadURL, _ := ps.PresignPut(ctx, "bucket", "upload.zip", time.Hour)
+}
+```
+
+### RangeDriver
+
+Read specific byte ranges:
+
+```go
+if rd, ok := t.Driver().(driver.RangeDriver); ok {
+    reader, _ := rd.GetRange(ctx, "bucket", "video.mp4", 1000, 1000)
+    defer reader.Close()
+}
+```
+
+## API
+
+### Constructor
+
+```go
+func New() *GCSDriver
+```
+
+Creates a new GCS driver instance.
+
+### Client
+
+```go
+func (d *GCSDriver) Client() *storage.Client
+```
+
+Returns the underlying `*storage.Client` for advanced GCS operations.
+
+### Unwrap
+
+```go
+func Unwrap(accessor interface{ Driver() driver.Driver }) *GCSDriver
+```
+
+Extract the `*GCSDriver` from a Trove handle:
+
+```go
+gcsdrv := gcsdriver.Unwrap(troveInstance)
+if gcsdrv != nil {
+    raw := gcsdrv.Client()
+}
+```
+
+### Driver Registration
+
+The GCS driver auto-registers via `init()`:
+
+```go
+factory, ok := driver.Lookup("gcs")
+drv := factory()
+```
+
+## Emulator Setup for Development
+
+Run `fake-gcs-server` locally with Docker:
+
+```bash
+docker run -d --name fake-gcs \
+  -p 4443:4443 \
+  fsouza/fake-gcs-server -scheme http
+```
+
+Then connect:
+
+```go
+drv := gcsdriver.New()
+drv.Open(ctx, "gcs://test-project/test-bucket?endpoint=http://localhost:4443")
+```
+
+## Integration Tests
+
+```bash
+# Start fake-gcs-server
+docker run -d -p 4443:4443 fsouza/fake-gcs-server -scheme http
+
+# Run integration tests
+cd drivers/gcsdriver
+go test -tags integration -v ./...
+```
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GCS_ENDPOINT` | `http://localhost:4443/storage/v1/` | GCS endpoint |
+| `GCS_PROJECT_ID` | `test-project` | Google Cloud project ID |
+
+## Limitations
+
+- Multipart uploads use GCS compose, which is limited to 32 components per compose call
+- Signed URLs require appropriate service account credentials
+- When using a custom endpoint, authentication is disabled automatically

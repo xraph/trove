@@ -1,0 +1,105 @@
+---
+title: "Trove Object Storage"
+description: "Multi-backend object storage with driver-based architecture, multi-backend routing, and a conformance test suite."
+---
+
+import { Cards, Card } from "fumadocs-ui/components/card";
+
+Trove Object Storage is a multi-backend storage layer for the Forge ecosystem. It answers the fundamental question: **"How do I store and retrieve binary objects across heterogeneous backends with a single, consistent API?"**
+
+Trove supports multiple storage backends through dedicated drivers:
+
+- **Local Filesystem** -- Files stored on disk with atomic writes and sidecar metadata
+- **In-Memory** -- Thread-safe in-memory store for testing and ephemeral data
+- **S3** -- Amazon S3 and S3-compatible stores (MinIO, Spaces, R2, B2)
+- **GCS** -- Google Cloud Storage *(coming soon)*
+- **Azure Blob** -- Azure Blob Storage *(coming soon)*
+
+## Key Features
+
+- **Driver Interface** -- Every backend implements a minimal `driver.Driver` interface for Put, Get, Delete, Head, List, Copy, and bucket operations
+- **Multi-Backend Routing** -- Route objects to different backends by pattern (`*.log` -> archive) or custom function
+- **Functional Options** -- Configure chunk size, pool size, checksums, retries, and routing with composable options
+- **Checksum Verification** -- Built-in integrity verification with SHA-256, BLAKE3, and XXHash
+- **Conformance Test Suite** -- `trovetest.RunDriverSuite` validates every driver implementation against the same tests
+- **TypeID Identifiers** -- K-sortable, globally unique IDs with entity-type prefixes for objects, buckets, uploads, and more
+- **Capability Interfaces** -- Drivers optionally implement `MultipartDriver`, `PresignDriver`, `VersioningDriver`, `NotificationDriver`, `LifecycleDriver`, and `RangeDriver`
+- **Streaming Engine** -- Managed chunked transfers with backpressure, concurrency pools, buffer reuse, and resumable uploads/downloads
+
+## Quick Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "io"
+    "strings"
+
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/driver"
+    "github.com/xraph/trove/drivers/localdriver"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 1. Create and open the local filesystem driver.
+    drv := localdriver.New()
+    drv.Open(ctx, "file:///tmp/trove-data")
+
+    // 2. Open a Trove instance with the driver.
+    t, err := trove.Open(drv, trove.WithDefaultBucket("uploads"))
+    if err != nil {
+        panic(err)
+    }
+    defer t.Close(ctx)
+
+    // 3. Create a bucket and store an object.
+    t.CreateBucket(ctx, "uploads")
+
+    info, _ := t.Put(ctx, "uploads", "hello.txt",
+        strings.NewReader("Hello, Trove!"),
+        driver.WithContentType("text/plain"),
+    )
+    fmt.Printf("Stored: %s (%d bytes)\n", info.Key, info.Size)
+
+    // 4. Retrieve the object.
+    reader, _ := t.Get(ctx, "uploads", "hello.txt")
+    defer reader.Close()
+
+    data, _ := io.ReadAll(reader)
+    fmt.Println(string(data)) // Hello, Trove!
+}
+```
+
+## Architecture
+
+```
+trove.Open(driver)
+     │
+     ├── Config        (chunk size, pool, checksums, retries)
+     ├── Router        (pattern + function routing)
+     │    ├── Default Driver
+     │    └── Named Backends
+     ├── Pool          (concurrency, bandwidth, backpressure)
+     │    └── Streams  (chunked transfer, lifecycle hooks)
+     └── CRUD Methods  (Put, Get, Delete, Head, List, Copy, Stream)
+            │
+            ▼
+     driver.Driver     (local, mem, s3, gcs, azure, ...)
+```
+
+The `Trove` struct wraps one or more storage drivers. Operations flow through the Router, which resolves the correct backend based on bucket/key patterns or custom routing functions. Each driver implements the standard `driver.Driver` interface.
+
+## Next Steps
+
+<Cards>
+  <Card title="Getting Started" href="/docs/storage/getting-started" description="Install Trove and store your first object in under 5 minutes." />
+  <Card title="Driver Interface" href="/docs/storage/driver-interface" description="Understand the Driver interface, capability extensions, and how to build custom drivers." />
+  <Card title="Local Driver" href="/docs/storage/drivers/local" description="Store objects on the local filesystem with atomic writes." />
+  <Card title="Memory Driver" href="/docs/storage/drivers/memory" description="In-memory driver for testing and ephemeral data." />
+  <Card title="S3 Driver" href="/docs/storage/drivers/s3" description="Amazon S3 and S3-compatible storage with multipart, presign, and range reads." />
+  <Card title="Streaming Engine" href="/docs/storage/streaming-engine" description="Managed chunked transfers with backpressure, pools, and resumability." />
+</Cards>

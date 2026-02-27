@@ -1,0 +1,17 @@
+{
+  "title": "Object Storage",
+  "pages": [
+    "index",
+    "getting-started",
+    "driver-interface",
+    "streaming-engine",
+    "middleware",
+    "cas",
+    "vfs",
+    "extension",
+    "grove-store",
+    "transport",
+    "ecosystem",
+    "...drivers"
+  ]
+}

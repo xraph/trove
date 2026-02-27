@@ -1,0 +1,151 @@
+---
+title: "SFTP Driver"
+description: "SFTP remote file storage driver for SSH-accessible servers."
+---
+
+The SFTP driver stores objects on remote servers via SSH/SFTP. Buckets map to directories and objects map to files. It implements the core `driver.Driver` interface.
+
+## Installation
+
+The SFTP driver has its own Go module to isolate the SSH/SFTP dependencies:
+
+```bash
+go get github.com/xraph/trove/drivers/sftpdriver
+```
+
+## Usage
+
+```go
+import (
+    "context"
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/sftpdriver"
+)
+
+ctx := context.Background()
+
+// Create and open the driver.
+drv := sftpdriver.New()
+err := drv.Open(ctx, "sftp://user:password@myhost:22/data")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use with Trove.
+t, err := trove.Open(drv)
+```
+
+### With SSH Key Authentication
+
+```go
+drv := sftpdriver.New()
+err := drv.Open(ctx, "sftp://user@myhost:22/data?key=/home/user/.ssh/id_rsa")
+```
+
+## DSN Format
+
+```
+sftp://USER:PASSWORD@HOST:PORT/BASE_PATH
+sftp://USER@HOST:PORT/BASE_PATH?key=/path/to/private/key
+```
+
+| Component | Description |
+|-----------|-------------|
+| `USER` | SSH username |
+| `PASSWORD` | SSH password (optional if using key auth) |
+| `HOST` | SSH server hostname or IP |
+| `PORT` | SSH port (default: `22`) |
+| `BASE_PATH` | Base directory path on the remote server |
+| `key` | Path to SSH private key file |
+
+## Storage Layout
+
+The SFTP driver maps Trove concepts to the filesystem:
+
+- **Buckets** = subdirectories under the base path
+- **Objects** = files within bucket directories
+- **Metadata** = `.meta.json` sidecar files alongside each object
+
+```
+/data/                        # base path
+  my-bucket/                  # bucket
+    photo.jpg                 # object
+    photo.jpg.meta.json       # metadata sidecar
+    docs/
+      report.pdf              # nested object (key: "docs/report.pdf")
+      report.pdf.meta.json
+```
+
+## API
+
+### Constructor
+
+```go
+func New() *SFTPDriver
+```
+
+Creates a new SFTP driver instance.
+
+### Unwrap
+
+```go
+func Unwrap(accessor interface{ Driver() driver.Driver }) *SFTPDriver
+```
+
+Extract the `*SFTPDriver` from a Trove handle:
+
+```go
+sftpdrv := sftpdriver.Unwrap(troveInstance)
+```
+
+### Driver Registration
+
+The SFTP driver auto-registers via `init()`:
+
+```go
+factory, ok := driver.Lookup("sftp")
+drv := factory()
+```
+
+## Capabilities
+
+The SFTP driver implements the core `driver.Driver` interface only. It does not implement `MultipartDriver`, `PresignDriver`, or `RangeDriver`.
+
+| Capability | Supported |
+|------------|-----------|
+| Core CRUD (Put, Get, Delete, Head) | Yes |
+| List with prefix/delimiter | Yes |
+| Copy | Yes |
+| Bucket operations | Yes |
+| Multipart uploads | No |
+| Pre-signed URLs | No |
+| Byte-range reads | No |
+
+## Integration Tests
+
+```bash
+# Start SFTP server with Docker
+docker run -d -p 2222:22 \
+  atmoz/sftp user:password:::data
+
+# Run integration tests
+cd drivers/sftpdriver
+SFTP_HOST=localhost SFTP_PORT=2222 SFTP_USER=user SFTP_PASSWORD=password \
+  go test -tags integration -v ./...
+```
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SFTP_HOST` | `localhost` | SFTP server hostname |
+| `SFTP_PORT` | `2222` | SFTP server port |
+| `SFTP_USER` | `testuser` | SSH username |
+| `SFTP_PASSWORD` | `testpass` | SSH password |
+
+## Limitations
+
+- No support for multipart uploads, pre-signed URLs, or byte-range reads
+- Metadata is stored in `.meta.json` sidecar files (not in-band)
+- SSH host key verification defaults to `InsecureIgnoreHostKey` (suitable for development; configure known hosts in production)
+- Large file transfers are limited by available memory since data passes through the SFTP client

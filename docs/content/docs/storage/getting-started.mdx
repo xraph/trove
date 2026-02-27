@@ -1,0 +1,204 @@
+---
+title: "Getting Started with Object Storage"
+description: "Install Trove object storage and run your first Put/Get in under 5 minutes."
+---
+
+## Installation
+
+```bash
+go get github.com/xraph/trove
+```
+
+For local filesystem storage:
+
+```bash
+go get github.com/xraph/trove/drivers/localdriver
+```
+
+For in-memory storage (testing):
+
+```bash
+go get github.com/xraph/trove/drivers/memdriver
+```
+
+## Step 1: Create a Driver
+
+Every Trove instance needs a storage driver. The local filesystem driver stores objects as files on disk:
+
+```go
+import (
+    "context"
+    "github.com/xraph/trove/drivers/localdriver"
+)
+
+ctx := context.Background()
+
+drv := localdriver.New()
+err := drv.Open(ctx, "file:///tmp/trove-data")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+For testing, use the in-memory driver (no DSN needed):
+
+```go
+import "github.com/xraph/trove/drivers/memdriver"
+
+drv := memdriver.New()
+```
+
+## Step 2: Open a Trove Instance
+
+```go
+import "github.com/xraph/trove"
+
+t, err := trove.Open(drv)
+if err != nil {
+    log.Fatal(err)
+}
+defer t.Close(ctx)
+```
+
+### Configuration Options
+
+```go
+t, err := trove.Open(drv,
+    trove.WithDefaultBucket("uploads"),       // default bucket when none specified
+    trove.WithChunkSize(8 * 1024 * 1024),     // 8MB streaming chunks
+    trove.WithPoolSize(16),                    // max concurrent streams
+    trove.WithChecksumAlgorithm(trove.Blake3), // BLAKE3 integrity checks
+    trove.WithStreamBufferSize(64 * 1024),     // 64KB stream buffer
+)
+```
+
+## Step 3: Create a Bucket
+
+Buckets are top-level containers for objects. Create one before storing objects:
+
+```go
+err := t.CreateBucket(ctx, "photos")
+```
+
+## Step 4: Store an Object
+
+```go
+import (
+    "strings"
+    "github.com/xraph/trove/driver"
+)
+
+info, err := t.Put(ctx, "photos", "vacation/beach.jpg", file,
+    driver.WithContentType("image/jpeg"),
+    driver.WithMetadata(map[string]string{
+        "author": "alice",
+        "album":  "summer-2025",
+    }),
+)
+fmt.Printf("Stored %s (%d bytes, etag=%s)\n", info.Key, info.Size, info.ETag)
+```
+
+## Step 5: Retrieve an Object
+
+```go
+reader, err := t.Get(ctx, "photos", "vacation/beach.jpg")
+if err != nil {
+    log.Fatal(err)
+}
+defer reader.Close()
+
+// Access metadata
+fmt.Println("Content-Type:", reader.Info.ContentType)
+fmt.Println("Size:", reader.Info.Size)
+
+// Read content
+data, _ := io.ReadAll(reader)
+```
+
+## Step 6: List Objects
+
+```go
+iter, err := t.List(ctx, "photos", driver.WithPrefix("vacation/"))
+if err != nil {
+    log.Fatal(err)
+}
+
+objects, _ := iter.All(ctx)
+for _, obj := range objects {
+    fmt.Printf("  %s (%d bytes)\n", obj.Key, obj.Size)
+}
+```
+
+## Step 7: Delete an Object
+
+```go
+err := t.Delete(ctx, "photos", "vacation/beach.jpg")
+```
+
+## Step 8: Check Object Metadata
+
+```go
+info, err := t.Head(ctx, "photos", "vacation/beach.jpg")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Key=%s Size=%d ContentType=%s\n", info.Key, info.Size, info.ContentType)
+```
+
+## Multi-Backend Routing
+
+Trove can route objects to different storage backends based on patterns or custom logic:
+
+```go
+import (
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/localdriver"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+primary := localdriver.New()
+primary.Open(ctx, "file:///data/primary")
+
+archive := localdriver.New()
+archive.Open(ctx, "file:///data/archive")
+
+cache := memdriver.New()
+
+t, _ := trove.Open(primary,
+    // Named backends
+    trove.WithBackend("archive", archive),
+    trove.WithBackend("cache", cache),
+
+    // Pattern routing: all .log files go to archive
+    trove.WithRoute("*.log", "archive"),
+
+    // Function routing: compliance bucket goes to archive
+    trove.WithRouteFunc(func(bucket, key string) string {
+        if bucket == "compliance" {
+            return "archive"
+        }
+        return "" // fall through to default
+    }),
+)
+```
+
+### Direct Backend Access
+
+Access a specific backend directly, bypassing routing:
+
+```go
+archiveHandle, err := t.Backend("archive")
+if err != nil {
+    log.Fatal(err)
+}
+
+// All operations go directly to the archive backend
+archiveHandle.Put(ctx, "logs", "app.log", logReader)
+```
+
+## Next Steps
+
+- [Driver Interface](/docs/storage/driver-interface) -- Understand the Driver interface and build custom drivers
+- [Local Driver](/docs/storage/drivers/local) -- Full reference for filesystem storage
+- [Memory Driver](/docs/storage/drivers/memory) -- In-memory driver for testing
+- [Go Packages](/docs/api-reference/go-packages) -- Complete API reference

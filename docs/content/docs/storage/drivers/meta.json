@@ -1,0 +1,11 @@
+{
+  "title": "Storage Drivers",
+  "pages": [
+    "local",
+    "memory",
+    "s3",
+    "gcs",
+    "azure",
+    "sftp"
+  ]
+}

@@ -1,0 +1,150 @@
+---
+title: Benchmarks
+description: "Performance comparison: Grove vs raw SQL, Bun, and GORM"
+---
+
+Grove is designed for near-raw performance. These benchmarks compare Grove
+against raw `database/sql`, Bun, and GORM using SQLite in-memory databases.
+
+## Running Benchmarks
+
+```bash
+# Run all benchmarks
+make bench
+
+# Generate markdown report
+make bench-report
+
+# Update README.md and docs with latest results
+make bench-update
+```
+
+## Results
+
+{/* BENCH:START */}
+> Benchmarks generated on 2026-02-22 with go1.25.7 on darwin/arm64. Each benchmark ran 5 times; values are averages.
+
+### Insert
+
+| Library | ns/op | B/op | allocs/op | vs Raw SQL |
+|---------|------:|-----:|----------:|-----------:|
+| Raw SQL | 4,015 | 880 | 20 | baseline |
+| Grove | 4,381 | 1,283 | 28 | +9.1% |
+| Bun | 8,459 | 5,470 | 27 | +110.7% |
+| GORM | 10,265 | 4,954 | 66 | +155.7% |
+
+### SelectOne
+
+| Library | ns/op | B/op | allocs/op | vs Raw SQL |
+|---------|------:|-----:|----------:|-----------:|
+| Raw SQL | 4,747 | 1,096 | 39 | baseline |
+| Grove | 5,575 | 1,458 | 34 | +17.4% |
+| Bun | 6,695 | 5,944 | 43 | +41.0% |
+| GORM | 8,070 | 4,383 | 81 | +70.0% |
+
+### SelectMulti
+
+| Library | ns/op | B/op | allocs/op | vs Raw SQL |
+|---------|------:|-----:|----------:|-----------:|
+| Raw SQL | 58,079 | 20,984 | 388 | baseline |
+| Grove | 45,686 | 23,413 | 584 | -21.3% |
+| Bun | 67,184 | 23,192 | 395 | +15.7% |
+| GORM | 83,217 | 28,570 | 765 | +43.3% |
+
+### Update
+
+| Library | ns/op | B/op | allocs/op | vs Raw SQL |
+|---------|------:|-----:|----------:|-----------:|
+| Raw SQL | 2,821 | 520 | 13 | baseline |
+| Grove | 3,617 | 1,010 | 21 | +28.2% |
+| Bun | 4,074 | 5,205 | 19 | +44.4% |
+| GORM | 5,468 | 4,020 | 49 | +93.8% |
+
+### Delete
+
+| Library | ns/op | B/op | allocs/op | vs Raw SQL |
+|---------|------:|-----:|----------:|-----------:|
+| Raw SQL | 3,479 | 232 | 8 | baseline |
+| Grove | 5,083 | 553 | 13 | +46.1% |
+| Bun | 5,147 | 4,880 | 12 | +47.9% |
+| GORM | 6,660 | 2,856 | 36 | +91.4% |
+
+### BulkInsert100
+
+| Library | ns/op | B/op | allocs/op | vs Raw SQL |
+|---------|------:|-----:|----------:|-----------:|
+| Raw SQL | 151,006 | 60,141 | 1524 | baseline |
+| Grove | 105,572 | 42,111 | 1421 | -30.1% |
+| Bun | 143,532 | 30,389 | 224 | -4.9% |
+| GORM | 187,914 | 93,706 | 1251 | +24.4% |
+
+### BulkInsert1000
+
+| Library | ns/op | B/op | allocs/op | vs Raw SQL |
+|---------|------:|-----:|----------:|-----------:|
+| Raw SQL | 1,401,957 | 605,384 | 16513 | baseline |
+| Grove | 967,190 | 409,753 | 14021 | -31.0% |
+| Bun | 1,359,612 | 408,694 | 2033 | -3.0% |
+| GORM | 1,782,186 | 894,166 | 12051 | +27.1% |
+
+### BuildSelect
+
+| Variant | ns/op | B/op | allocs/op |
+|---------|------:|-----:|----------:|
+| Grove | 453 | 864 | 11 |
+| Bun | 825 | 1,744 | 17 |
+
+### BuildInsert
+
+| Variant | ns/op | B/op | allocs/op |
+|---------|------:|-----:|----------:|
+| Grove | 842 | 930 | 19 |
+| Bun | 1,012 | 1,425 | 17 |
+
+### BuildUpdate
+
+| Variant | ns/op | B/op | allocs/op |
+|---------|------:|-----:|----------:|
+| Grove | 380 | 736 | 11 |
+| Bun | 597 | 1,184 | 14 |
+
+### SchemaCache
+
+| Variant | ns/op | B/op | allocs/op |
+|---------|------:|-----:|----------:|
+| CacheHit | 11 | 0 | 0 |
+| ColdStart | 3,123 | 3,728 | 75 |
+
+### TagResolution
+
+| Variant | ns/op | B/op | allocs/op |
+|---------|------:|-----:|----------:|
+| GroveTags | 3,101 | 3,728 | 75 |
+| BunFallback | 3,398 | 3,736 | 74 |
+
+{/* BENCH:END */}
+
+## Methodology
+
+- **Database:** SQLite in-memory (`:memory:`) -- isolates ORM overhead from network/disk
+- **Runs:** 5 iterations per benchmark (`-count=5`) for statistical stability
+- **Model:** `User` struct with 6 fields (ID, Name, Email, Age, Active, CreatedAt)
+- **Metrics:** ns/op, B/op (bytes allocated), allocs/op (heap allocations)
+- **Overhead:** Computed as `(ORM - RawSQL) / RawSQL * 100%`
+
+## What's Measured
+
+| Category | Description |
+|----------|-------------|
+| Insert | Single row INSERT |
+| SelectOne | SELECT single row by PK |
+| SelectMulti | SELECT 50 rows with WHERE + LIMIT |
+| Update | UPDATE 2 columns by PK |
+| Delete | DELETE single row by PK |
+| BulkInsert100 | INSERT 100 rows in one operation |
+| BulkInsert1000 | INSERT 1000 rows in one operation |
+| BuildSelect | SQL generation only (no I/O) |
+| BuildInsert | SQL generation only (no I/O) |
+| BuildUpdate | SQL generation only (no I/O) |
+| SchemaCache | Schema registry cache hit vs cold start |
+| TagResolution | Grove tags vs bun tag fallback resolution |

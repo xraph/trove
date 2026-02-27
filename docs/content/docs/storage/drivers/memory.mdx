@@ -1,0 +1,87 @@
+---
+title: "Memory Driver"
+description: "In-memory object storage driver for testing and ephemeral data."
+---
+
+The memory driver stores all objects in-memory using Go maps protected by a read-write mutex. It is designed for testing and development -- data is lost when the process exits.
+
+## Installation
+
+```bash
+go get github.com/xraph/trove/drivers/memdriver
+```
+
+## Usage
+
+```go
+import (
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+drv := memdriver.New()
+
+t, err := trove.Open(drv)
+if err != nil {
+    log.Fatal(err)
+}
+defer t.Close(ctx)
+```
+
+No DSN or `Open()` call is required -- the memory driver is ready to use immediately after `New()`.
+
+## Features
+
+- **Thread-safe** -- All operations are protected by `sync.RWMutex`
+- **Zero configuration** -- No DSN, no files, no setup
+- **Sorted listing** -- `List` returns objects in lexicographic key order
+- **Pagination** -- Supports `WithMaxKeys` and cursor-based pagination
+- **Full conformance** -- Passes the complete `trovetest.RunDriverSuite`
+
+## When to Use
+
+- **Unit tests** -- Fast, isolated test environments with no filesystem dependencies
+- **Integration tests** -- Verify routing and multi-backend logic without real backends
+- **Development** -- Quick prototyping without setting up storage infrastructure
+- **Conformance testing** -- Reference implementation for the driver interface
+
+## Example: Test Setup
+
+```go
+func TestMyService(t *testing.T) {
+    drv := memdriver.New()
+    store, _ := trove.Open(drv)
+    defer store.Close(context.Background())
+
+    store.CreateBucket(context.Background(), "test")
+
+    // Your test logic using store...
+}
+```
+
+## Example: Multi-Backend Testing
+
+```go
+func TestRouting(t *testing.T) {
+    primary := memdriver.New()
+    archive := memdriver.New()
+
+    store, _ := trove.Open(primary,
+        trove.WithBackend("archive", archive),
+        trove.WithRoute("*.log", "archive"),
+    )
+
+    // Put a .log file -- routes to archive
+    store.Put(ctx, "logs", "app.log", strings.NewReader("log data"))
+
+    // Verify it landed on the archive driver
+    _, err := archive.Get(ctx, "logs", "app.log")
+    assert.NoError(t, err)
+}
+```
+
+## Limitations
+
+- Data is not persisted -- lost on process exit
+- No multipart upload, pre-signed URLs, versioning, or lifecycle management
+- Not suitable for production use with large datasets (all data is in memory)

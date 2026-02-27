@@ -1,0 +1,139 @@
+---
+title: "Local Filesystem Driver"
+description: "Store objects on the local filesystem with atomic writes and sidecar metadata."
+---
+
+The local filesystem driver stores objects as files on disk. Buckets are directories, objects are files, and metadata is stored in `.meta.json` sidecar files alongside each object.
+
+## Installation
+
+```bash
+go get github.com/xraph/trove/drivers/localdriver
+```
+
+## Usage
+
+```go
+import (
+    "context"
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/localdriver"
+)
+
+ctx := context.Background()
+
+// Create the driver
+drv := localdriver.New()
+
+// Open with a file:// DSN
+err := drv.Open(ctx, "file:///var/data/trove")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use with Trove
+t, err := trove.Open(drv)
+```
+
+## DSN Format
+
+```
+file:///absolute/path/to/root
+```
+
+The path after `file://` becomes the root directory. All buckets and objects are stored under this path.
+
+## Storage Layout
+
+```
+/var/data/trove/           <-- root directory
+├── photos/                <-- bucket "photos"
+│   ├── beach.jpg          <-- object "beach.jpg"
+│   ├── .beach.jpg.meta.json    <-- metadata sidecar
+│   └── sunset.png
+└── documents/             <-- bucket "documents"
+    ├── report.pdf
+    └── .report.pdf.meta.json
+```
+
+## Features
+
+### Atomic Writes
+
+Put operations use write-to-temp-then-rename for crash safety. Objects are first written to a temporary file, then atomically renamed to the final path. This prevents partial writes from corrupting existing objects.
+
+### Sidecar Metadata
+
+Each object can have an associated `.meta.json` sidecar file that stores:
+- Content type
+- Custom metadata key-value pairs
+
+### Content Type Detection
+
+If no content type is specified via `driver.WithContentType()`, the driver detects it from the file extension using Go's `mime` package.
+
+### Directory-Based Buckets
+
+Buckets map directly to subdirectories under the root. Creating a bucket creates a directory; deleting a bucket removes the directory.
+
+## API
+
+### Constructor
+
+```go
+func New() *LocalDriver
+```
+
+Creates a new local filesystem driver.
+
+### SetRootDir / RootDir
+
+```go
+drv := localdriver.New()
+drv.SetRootDir("/tmp/test-data")
+fmt.Println(drv.RootDir()) // /tmp/test-data
+```
+
+Set the root directory directly (alternative to using `Open` with a DSN).
+
+### Unwrap
+
+Extract the `*LocalDriver` from a Trove handle for direct access:
+
+```go
+func Unwrap(accessor interface{ Driver() driver.Driver }) *LocalDriver
+```
+
+```go
+local := localdriver.Unwrap(troveInstance)
+if local != nil {
+    fmt.Println("Root:", local.RootDir())
+}
+```
+
+## Example: File Upload Server
+
+```go
+func handleUpload(w http.ResponseWriter, r *http.Request) {
+    file, header, _ := r.FormFile("file")
+    defer file.Close()
+
+    info, err := store.Put(r.Context(), "uploads", header.Filename, file,
+        driver.WithContentType(header.Header.Get("Content-Type")),
+    )
+    if err != nil {
+        http.Error(w, err.Error(), 500)
+        return
+    }
+
+    fmt.Fprintf(w, "Uploaded: %s (%d bytes)", info.Key, info.Size)
+}
+```
+
+## Limitations
+
+- No server-side copy across different root directories
+- No multipart upload support (entire file is written at once)
+- No pre-signed URLs
+- Metadata is limited to what `.meta.json` sidecar files store
+- Not suitable for high-concurrency production workloads (use S3/GCS drivers instead)

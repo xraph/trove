@@ -1,0 +1,171 @@
+---
+title: "Virtual Filesystem"
+description: "File-system abstraction over object storage with io/fs.FS compatibility."
+---
+
+The VFS package provides a familiar file-system interface over Trove's flat object key space. It adapts key prefixes into a hierarchical directory structure, supporting Stat, ReadDir, Walk, Create, Remove, Rename, and Go's `io/fs.FS` interface.
+
+## Quick Start
+
+```go
+import (
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+drv := memdriver.New()
+t, _ := trove.Open(drv, trove.WithVFS("files"))
+defer t.Close(ctx)
+
+t.CreateBucket(ctx, "files")
+
+// Get a VFS view of the "files" bucket.
+fs := t.VFS()
+
+// Create a file.
+f, _ := fs.Create(ctx, "docs/readme.md")
+f.Write([]byte("# Hello"))
+f.Close()
+
+// Read it back.
+f, _ = fs.Open(ctx, "docs/readme.md")
+data, _ := io.ReadAll(f)
+f.Close()
+```
+
+## File Operations
+
+### Create and Write
+
+```go
+f, err := fs.Create(ctx, "path/to/file.txt")
+if err != nil {
+    return err
+}
+f.Write([]byte("content"))
+f.Close() // flushes to storage
+```
+
+### Open and Read
+
+```go
+f, err := fs.Open(ctx, "path/to/file.txt")
+if err != nil {
+    return err
+}
+defer f.Close()
+data, _ := io.ReadAll(f)
+```
+
+### Stat
+
+```go
+info, err := fs.Stat(ctx, "path/to/file.txt")
+fmt.Println(info.Name(), info.Size(), info.IsDir())
+```
+
+### Mkdir
+
+Creates a directory marker (zero-length object with trailing "/"):
+
+```go
+fs.Mkdir(ctx, "images")
+```
+
+### Remove / RemoveAll
+
+```go
+fs.Remove(ctx, "path/to/file.txt")     // single file
+fs.RemoveAll(ctx, "path/to")           // recursive
+```
+
+### Rename
+
+Copy + delete:
+
+```go
+fs.Rename(ctx, "old/path.txt", "new/path.txt")
+```
+
+### Metadata
+
+```go
+fs.SetMetadata(ctx, "file.txt", map[string]string{"author": "alice"})
+meta, _ := fs.GetMetadata(ctx, "file.txt")
+```
+
+## Directory Listing
+
+### ReadDir
+
+```go
+entries, _ := fs.ReadDir(ctx, "docs")
+for _, entry := range entries {
+    fmt.Printf("%s (dir=%v)\n", entry.Name(), entry.IsDir())
+}
+```
+
+### Walk
+
+Recursively traverse the file tree:
+
+```go
+fs.Walk(ctx, "", func(path string, info *vfs.FileInfo, err error) error {
+    if err != nil {
+        return err
+    }
+    fmt.Printf("%s (%d bytes)\n", path, info.Size())
+    return nil
+})
+```
+
+Use `fs.SkipDir` to skip directories, `fs.SkipAll` to stop early.
+
+## io/fs.FS Compatibility
+
+Wrap VFS with `NewIOFS` for use with Go's standard library:
+
+```go
+import (
+    "net/http"
+    "github.com/xraph/trove/vfs"
+)
+
+iofs := vfs.NewIOFS(t.VFS(), ctx)
+
+// Serve files over HTTP.
+http.Handle("/files/", http.StripPrefix("/files/", http.FileServer(http.FS(iofs))))
+
+// Parse templates.
+tmpl, _ := template.ParseFS(iofs, "templates/*.html")
+```
+
+The `IOFS` adapter implements `fs.FS` and returns `fs.ReadDirFile` for directories.
+
+## How It Works
+
+VFS maps between flat object keys and file-system paths:
+
+| VFS Operation | Object Key |
+|---------------|------------|
+| `Open("docs/readme.md")` | `docs/readme.md` |
+| `Mkdir("images")` | `images/` (zero-length marker) |
+| `ReadDir("docs")` | `List(prefix="docs/", delimiter="/")` |
+| `Walk("")` | Recursive `List` + `ReadDir` |
+
+Directories are detected by:
+1. Keys ending with "/" (explicit directory markers from `Mkdir`)
+2. Keys with "/" in the relative path (implicit directories)
+
+## Multiple Buckets
+
+Create VFS views for different buckets:
+
+```go
+// Default bucket from WithVFS option.
+defaultFS := t.VFS()
+
+// Specific bucket.
+mediaFS := t.VFS("media")
+logsFS := t.VFS("logs")
+```

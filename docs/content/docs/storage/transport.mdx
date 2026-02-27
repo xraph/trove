@@ -1,0 +1,159 @@
+---
+title: "Transport & REST API"
+description: "HTTP REST endpoints for object storage, uploads, buckets, CAS, and admin operations."
+---
+
+The Trove extension exposes a full REST API for object storage operations. All endpoints are registered under the configured base path (default: `/trove/v1`).
+
+## Endpoints
+
+### Buckets
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/buckets` | Create a bucket |
+| `GET` | `/buckets` | List all buckets |
+| `GET` | `/buckets/:bucket` | Get bucket info |
+| `DELETE` | `/buckets/:bucket` | Delete a bucket |
+
+### Objects
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PUT` | `/buckets/:bucket/objects/*key` | Upload an object |
+| `GET` | `/buckets/:bucket/objects/*key` | Download an object |
+| `DELETE` | `/buckets/:bucket/objects/*key` | Delete an object |
+| `HEAD` | `/buckets/:bucket/objects/*key` | Get object metadata |
+| `GET` | `/buckets/:bucket/objects` | List objects in a bucket |
+
+### Multipart Uploads
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/buckets/:bucket/uploads` | Initiate multipart upload |
+| `PUT` | `/buckets/:bucket/uploads/:id/parts/:partNum` | Upload a part |
+| `POST` | `/buckets/:bucket/uploads/:id/complete` | Complete upload |
+| `DELETE` | `/buckets/:bucket/uploads/:id` | Abort upload |
+| `GET` | `/buckets/:bucket/uploads/:id` | Get upload status |
+
+### Content-Addressable Storage
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PUT` | `/cas` | Store content by hash |
+| `GET` | `/cas/:hash` | Retrieve content by hash |
+| `HEAD` | `/cas/:hash` | Check if hash exists |
+
+### Admin
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/admin/stats` | Storage statistics |
+
+## Request / Response Examples
+
+### Upload an Object
+
+```bash
+curl -X PUT \
+  http://localhost:8080/trove/v1/buckets/uploads/objects/photos/cat.jpg \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @cat.jpg
+```
+
+```json
+{
+  "bucket": "uploads",
+  "key": "photos/cat.jpg",
+  "size": 204800,
+  "content_type": "image/jpeg",
+  "etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+  "last_modified": "2025-01-15T10:30:00Z"
+}
+```
+
+### Download an Object
+
+```bash
+curl http://localhost:8080/trove/v1/buckets/uploads/objects/photos/cat.jpg \
+  -o cat.jpg
+```
+
+The response streams the object body with appropriate `Content-Type`, `Content-Length`, and `ETag` headers.
+
+### List Objects
+
+```bash
+curl "http://localhost:8080/trove/v1/buckets/uploads/objects?prefix=photos/&limit=100"
+```
+
+```json
+{
+  "objects": [
+    {
+      "key": "photos/cat.jpg",
+      "size": 204800,
+      "last_modified": "2025-01-15T10:30:00Z"
+    }
+  ],
+  "truncated": false
+}
+```
+
+### CAS Store
+
+```bash
+curl -X PUT \
+  http://localhost:8080/trove/v1/cas \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @data.bin
+```
+
+```json
+{
+  "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "size": 1024,
+  "deduplicated": false
+}
+```
+
+## Headers
+
+### Request Headers
+
+| Header | Description |
+|--------|-------------|
+| `Content-Type` | MIME type for uploads |
+| `Content-Length` | Object size (optional, enables size validation) |
+| `X-Trove-Checksum` | Expected checksum for integrity verification |
+| `X-Subject-ID` | Subject identifier for authorization (set by auth middleware) |
+
+### Response Headers
+
+| Header | Description |
+|--------|-------------|
+| `ETag` | Object entity tag |
+| `Content-Type` | Object MIME type |
+| `Content-Length` | Object size in bytes |
+| `Last-Modified` | Object modification timestamp |
+| `X-Trove-Checksum` | Server-computed checksum |
+
+## Error Responses
+
+All errors follow a consistent JSON format:
+
+```json
+{
+  "error": "object not found",
+  "code": 404
+}
+```
+
+| Code | Meaning |
+|------|---------|
+| `400` | Bad request (missing bucket, invalid key) |
+| `403` | Forbidden (Warden denied access) |
+| `404` | Object, bucket, or upload not found |
+| `409` | Conflict (bucket already exists) |
+| `413` | Payload too large (quota exceeded) |
+| `500` | Internal server error |

@@ -1,0 +1,189 @@
+---
+title: "Grove Store Layer"
+description: "Metadata persistence with Grove ORM: models, store, migrations, and multi-database support."
+---
+
+The Trove extension uses Grove for metadata persistence. Object metadata, bucket definitions, upload sessions, CAS index entries, and quotas are stored in a relational database (PostgreSQL, SQLite, or MongoDB) managed by Grove.
+
+## Models
+
+All models use Grove struct tags and embed `grove.BaseModel`.
+
+### Bucket
+
+```go
+type Bucket struct {
+    grove.BaseModel `grove:"table:trove_buckets,alias:b"`
+
+    ID            string            `grove:"id,pk"`
+    Name          string            `grove:"name,notnull,unique"`
+    Driver        string            `grove:"driver,notnull,default:'local'"`
+    Region        string            `grove:"region"`
+    Versioning    bool              `grove:"versioning,default:false"`
+    CASEnabled    bool              `grove:"cas_enabled,default:false"`
+    DefaultMeta   map[string]string `grove:"default_meta,type:jsonb"`
+    QuotaMaxBytes int64             `grove:"quota_max_bytes,default:0"`
+    TenantKey     string            `grove:"tenant_key"`
+    CreatedAt     time.Time         `grove:"created_at,notnull,default:current_timestamp"`
+    UpdatedAt     time.Time         `grove:"updated_at,notnull,default:current_timestamp"`
+}
+```
+
+### Object
+
+```go
+type Object struct {
+    grove.BaseModel `grove:"table:trove_objects,alias:o"`
+
+    ID               string            `grove:"id,pk"`
+    BucketID         string            `grove:"bucket_id,notnull"`
+    Key              string            `grove:"key,notnull"`
+    Size             int64             `grove:"size,notnull,default:0"`
+    ContentType      string            `grove:"content_type"`
+    ETag             string            `grove:"etag"`
+    ChecksumSHA256   string            `grove:"checksum_sha256"`
+    ChecksumBLAKE3   string            `grove:"checksum_blake3"`
+    Metadata         map[string]string `grove:"metadata,type:jsonb"`
+    Tags             map[string]string `grove:"tags,type:jsonb"`
+    StorageDriver    string            `grove:"storage_driver"`
+    StorageKey       string            `grove:"storage_key"`
+    TenantKey        string            `grove:"tenant_key"`
+    DeletedAt        *time.Time        `grove:"deleted_at,soft_delete"`
+    CreatedAt        time.Time         `grove:"created_at,notnull,default:current_timestamp"`
+    UpdatedAt        time.Time         `grove:"updated_at,notnull,default:current_timestamp"`
+}
+```
+
+### Upload Session
+
+```go
+type UploadSession struct {
+    grove.BaseModel `grove:"table:trove_upload_sessions,alias:us"`
+
+    ID          string     `grove:"id,pk"`
+    BucketID    string     `grove:"bucket_id,notnull"`
+    ObjectKey   string     `grove:"object_key,notnull"`
+    Status      string     `grove:"status,notnull,default:'initiated'"`
+    TotalParts  int        `grove:"total_parts,default:0"`
+    TotalSize   int64      `grove:"total_size,default:0"`
+    ExpiresAt   time.Time  `grove:"expires_at,notnull"`
+    CreatedAt   time.Time  `grove:"created_at,notnull,default:current_timestamp"`
+    UpdatedAt   time.Time  `grove:"updated_at,notnull,default:current_timestamp"`
+}
+```
+
+### CAS Entry
+
+```go
+type CASEntry struct {
+    grove.BaseModel `grove:"table:trove_cas_index,alias:cas"`
+
+    Hash      string    `grove:"hash,pk"`
+    BucketID  string    `grove:"bucket_id,notnull"`
+    ObjectKey string    `grove:"object_key"`
+    Size      int64     `grove:"size,notnull,default:0"`
+    RefCount  int       `grove:"ref_count,notnull,default:1"`
+    Pinned    bool      `grove:"pinned,default:false"`
+    CreatedAt time.Time `grove:"created_at,notnull,default:current_timestamp"`
+}
+```
+
+### Quota
+
+```go
+type Quota struct {
+    grove.BaseModel `grove:"table:trove_quotas,alias:q"`
+
+    TenantKey    string    `grove:"tenant_key,pk"`
+    UsedBytes    int64     `grove:"used_bytes,notnull,default:0"`
+    LimitBytes   int64     `grove:"limit_bytes,notnull,default:0"`
+    ObjectCount  int64     `grove:"object_count,notnull,default:0"`
+    LimitObjects int64     `grove:"limit_objects,notnull,default:0"`
+    UpdatedAt    time.Time `grove:"updated_at,notnull,default:current_timestamp"`
+}
+```
+
+## Store API
+
+The `store.Store` provides CRUD methods for all models:
+
+```go
+// Buckets
+store.CreateBucket(ctx, &bucket) error
+store.GetBucket(ctx, id) (*Bucket, error)
+store.GetBucketByName(ctx, name) (*Bucket, error)
+store.ListBuckets(ctx, ...ListOption) ([]*Bucket, error)
+
+// Objects
+store.CreateObject(ctx, &obj) error
+store.GetObject(ctx, id) (*Object, error)
+store.GetObjectByKey(ctx, bucketID, key) (*Object, error)
+store.ListObjects(ctx, bucketID, ...ListOption) ([]*Object, error)
+store.UpdateObject(ctx, &obj) error
+store.SoftDeleteObject(ctx, id) error
+
+// Upload Sessions
+store.CreateUploadSession(ctx, &session) error
+store.GetUploadSession(ctx, id) (*UploadSession, error)
+store.UpdateUploadSession(ctx, &session) error
+store.ListExpiredUploads(ctx, before) ([]*UploadSession, error)
+
+// CAS Index
+store.PutCASEntry(ctx, &entry) error
+store.GetCASEntry(ctx, hash) (*CASEntry, error)
+store.IncrementCASRef(ctx, hash) error
+store.DecrementCASRef(ctx, hash) error
+store.ListUnpinnedCAS(ctx, minRefCount) ([]*CASEntry, error)
+
+// Quotas
+store.GetQuota(ctx, tenantKey) (*Quota, error)
+store.UpdateQuotaUsage(ctx, tenantKey, deltaBytes, deltaCount) error
+store.SetQuota(ctx, &quota) error
+```
+
+### List Options
+
+```go
+store.ListObjects(ctx, bucketID,
+    store.WithPrefix("photos/"),
+    store.WithLimit(100),
+    store.WithOffset(0),
+    store.WithTenantKey("tenant-abc"),
+)
+```
+
+## Migrations
+
+Migrations run automatically on extension startup (unless `disable_migrate: true`). They use Grove's modular migration system under the `"trove"` namespace:
+
+```go
+migrate.NewGroup("trove",
+    migrate.NewMigration("001", "create trove_buckets", upSQL, downSQL),
+    migrate.NewMigration("002", "create trove_objects", upSQL, downSQL),
+    migrate.NewMigration("003", "create trove_upload_sessions", upSQL, downSQL),
+    migrate.NewMigration("004", "create trove_cas_index", upSQL, downSQL),
+    migrate.NewMigration("005", "create trove_quotas", upSQL, downSQL),
+)
+```
+
+### Tables Created
+
+| Table | Purpose | Key Indexes |
+|-------|---------|-------------|
+| `trove_buckets` | Bucket definitions | `name` (unique), `tenant_key` |
+| `trove_objects` | Object metadata | `(bucket_id, key)`, `tenant_key` |
+| `trove_upload_sessions` | Multipart uploads | `expires_at` |
+| `trove_cas_index` | CAS dedup index | `(pinned, ref_count)` |
+| `trove_quotas` | Per-tenant quotas | `tenant_key` (PK) |
+
+## Multi-Database Support
+
+The store layer works with any Grove-supported database:
+
+| Driver | Backend | Notes |
+|--------|---------|-------|
+| `pgdriver` | PostgreSQL | Full feature support, JSONB columns, RETURNING |
+| `sqlitedriver` | SQLite | Lightweight, embedded, JSONB via text |
+| `mongodriver` | MongoDB | Document-native, flexible schema |
+
+Driver detection is automatic based on the Grove DB's driver name.

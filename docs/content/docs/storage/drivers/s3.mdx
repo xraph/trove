@@ -1,0 +1,217 @@
+---
+title: "S3 Driver"
+description: "Amazon S3 and S3-compatible object storage driver with multipart uploads, pre-signed URLs, and byte-range reads."
+---
+
+The S3 driver stores objects in Amazon S3 or any S3-compatible service (MinIO, DigitalOcean Spaces, Backblaze B2, Cloudflare R2, etc.). It implements the core `driver.Driver` interface plus `MultipartDriver`, `PresignDriver`, and `RangeDriver` capability interfaces.
+
+## Installation
+
+The S3 driver has its own Go module to isolate the AWS SDK dependency:
+
+```bash
+go get github.com/xraph/trove/drivers/s3driver
+```
+
+## Usage
+
+```go
+import (
+    "context"
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/s3driver"
+)
+
+ctx := context.Background()
+
+// Create and open the driver.
+drv := s3driver.New()
+err := drv.Open(ctx, "s3://us-east-1/my-bucket")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Use with Trove.
+t, err := trove.Open(drv)
+```
+
+### MinIO / S3-Compatible
+
+```go
+drv := s3driver.New()
+err := drv.Open(ctx,
+    "s3://minioadmin:minioadmin@us-east-1/data?endpoint=http://localhost:9000&path_style=true",
+)
+```
+
+## DSN Format
+
+```
+s3://REGION/BUCKET
+s3://ACCESS_KEY:SECRET@REGION/BUCKET
+s3://ACCESS_KEY:SECRET@REGION/BUCKET?endpoint=URL&path_style=true
+```
+
+| Component | Description |
+|-----------|-------------|
+| `ACCESS_KEY:SECRET` | Optional static credentials. Omit to use default AWS credential chain (env vars, IAM roles, etc.) |
+| `REGION` | AWS region (e.g., `us-east-1`, `eu-west-1`). Defaults to `us-east-1` if empty |
+| `BUCKET` | Default bucket name |
+| `endpoint` | Override S3 endpoint URL (for MinIO, Spaces, R2, etc.) |
+| `path_style` | Set to `true` or `1` for path-style addressing (required by MinIO) |
+
+Driver options can also override DSN values:
+
+```go
+drv.Open(ctx, "s3://us-east-1/bucket",
+    driver.WithEndpoint("http://localhost:9000"),
+    driver.WithForcePathStyle(true),
+)
+```
+
+## Capabilities
+
+The S3 driver implements these capability interfaces beyond the core `driver.Driver`:
+
+### MultipartDriver
+
+Upload large objects in parts for reliability and parallelism:
+
+```go
+// Check capability.
+if mp, ok := t.Driver().(driver.MultipartDriver); ok {
+    uploadID, _ := mp.InitiateMultipart(ctx, "bucket", "large-file.zip",
+        driver.WithContentType("application/zip"),
+    )
+
+    part1, _ := mp.UploadPart(ctx, "bucket", "large-file.zip", uploadID, 1, chunk1Reader)
+    part2, _ := mp.UploadPart(ctx, "bucket", "large-file.zip", uploadID, 2, chunk2Reader)
+
+    info, _ := mp.CompleteMultipart(ctx, "bucket", "large-file.zip", uploadID,
+        []driver.PartInfo{*part1, *part2},
+    )
+    fmt.Printf("Uploaded: %s (%d bytes)\n", info.Key, info.Size)
+}
+```
+
+### PresignDriver
+
+Generate pre-signed URLs for direct client uploads/downloads:
+
+```go
+if ps, ok := t.Driver().(driver.PresignDriver); ok {
+    // Generate a download URL valid for 15 minutes.
+    downloadURL, _ := ps.PresignGet(ctx, "bucket", "file.pdf", 15*time.Minute)
+
+    // Generate an upload URL valid for 1 hour.
+    uploadURL, _ := ps.PresignPut(ctx, "bucket", "upload.zip", time.Hour)
+}
+```
+
+### RangeDriver
+
+Read specific byte ranges for resumable downloads or partial content:
+
+```go
+if rd, ok := t.Driver().(driver.RangeDriver); ok {
+    // Read bytes 1000-1999.
+    reader, _ := rd.GetRange(ctx, "bucket", "video.mp4", 1000, 1000)
+    defer reader.Close()
+
+    // Read from offset to end (-1 length).
+    reader, _ = rd.GetRange(ctx, "bucket", "video.mp4", 5000, -1)
+}
+```
+
+## API
+
+### Constructor
+
+```go
+func New() *S3Driver
+```
+
+Creates a new S3 driver instance.
+
+### Client
+
+```go
+func (d *S3Driver) Client() *s3.Client
+```
+
+Returns the underlying `*s3.Client` for advanced S3 operations not covered by the driver interface.
+
+### Unwrap
+
+```go
+func Unwrap(accessor interface{ Driver() driver.Driver }) *S3Driver
+```
+
+Extract the `*S3Driver` from a Trove handle:
+
+```go
+s3drv := s3driver.Unwrap(troveInstance)
+if s3drv != nil {
+    raw := s3drv.Client()
+    // Use raw AWS SDK client for advanced operations.
+}
+```
+
+### Driver Registration
+
+The S3 driver auto-registers via `init()`:
+
+```go
+factory, ok := driver.Lookup("s3")
+drv := factory()
+```
+
+## MinIO Setup for Development
+
+Run MinIO locally with Docker:
+
+```bash
+docker run -d --name minio \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+```
+
+Then connect:
+
+```go
+drv := s3driver.New()
+drv.Open(ctx, "s3://minioadmin:minioadmin@us-east-1/my-bucket?endpoint=http://localhost:9000&path_style=true")
+```
+
+## Integration Tests
+
+The S3 driver includes integration tests that run against a live S3-compatible service:
+
+```bash
+# Start MinIO
+docker run -d -p 9000:9000 minio/minio server /data
+
+# Run integration tests
+cd drivers/s3driver
+go test -tags integration -v ./...
+
+# Or with custom endpoint
+S3_ENDPOINT=http://my-minio:9000 go test -tags integration -v ./...
+```
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `S3_ENDPOINT` | `http://localhost:9000` | S3-compatible endpoint |
+| `S3_ACCESS_KEY` | `minioadmin` | Access key |
+| `S3_SECRET_KEY` | `minioadmin` | Secret key |
+| `S3_REGION` | `us-east-1` | AWS region |
+
+## Limitations
+
+- `Put()` reads the entire body into memory before uploading. For large objects, use the `MultipartDriver` interface
+- `Copy()` performs a HeadObject after copy to retrieve the full object info (S3 CopyObject doesn't return size)
+- Credential chain: static credentials from DSN take priority; omit them to use the default AWS credential chain (env vars, IAM roles, instance profiles)
