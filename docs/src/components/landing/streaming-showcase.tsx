@@ -6,28 +6,30 @@ import { FeatureBullet } from "./feature-bullet";
 import { FlowLine, FlowNode } from "./flow-primitives";
 import { SectionHeader } from "./section-header";
 
-// ─── KV Code Sample ──────────────────────────────────────────
-const kvCode = `store := redis.New(redis.Config{Addr: ":6379"})
+// ─── Streaming Code Sample ──────────────────────────────────
+const streamCode = `s, _ := t.Stream(ctx, "media", "video.mp4",
+    stream.Upload,
+    stream.WithChunkSize(16 * 1024 * 1024),
+    stream.WithBackpressure(stream.BackpressureBlock),
+)
+defer s.Close()
 
-// Keyspaces for logical separation
-cache := kv.WithKeyspace(store, "cache:")
-sessions := kv.WithKeyspace(store, "session:")
+for s.Next() {
+    chunk := s.Chunk()
+    // process chunk...
+}`;
 
-cache.Set(ctx, "user:123", userData, 5*time.Minute)
-val, _ := cache.Get(ctx, "user:123")`;
-
-// ─── Keyspace Visualization ──────────────────────────────────
-function KeyspaceVisualization() {
-  const namespaces = [
-    { label: "cache:", color: "blue" as const, delay: 0.1 },
-    { label: "session:", color: "green" as const, delay: 0.2 },
-    { label: "config:", color: "purple" as const, delay: 0.3 },
-  ];
-
-  const backends = [
-    { label: "Redis", color: "blue" as const, delay: 0.4 },
-    { label: "Badger", color: "green" as const, delay: 0.5 },
-    { label: "DynamoDB", color: "orange" as const, delay: 0.6 },
+// ─── Streaming Visualization ────────────────────────────────
+function StreamingVisualization() {
+  const streams = [
+    { label: "upload:", target: "S3", color: "blue" as const, delay: 0.1 },
+    {
+      label: "download:",
+      target: "Local",
+      color: "green" as const,
+      delay: 0.2,
+    },
+    { label: "transfer:", target: "GCS", color: "purple" as const, delay: 0.3 },
   ];
 
   return (
@@ -43,30 +45,30 @@ function KeyspaceVisualization() {
 
       <div className="relative p-3 sm:p-6 rounded-2xl border border-fd-border/50 bg-fd-card/30 backdrop-blur-sm">
         <div className="flex flex-col items-center gap-6">
-          {/* Keyspace flow diagram */}
+          {/* Stream flow diagram */}
           <div className="flex flex-col gap-4 w-full">
-            {namespaces.map((ns, i) => (
+            {streams.map((s, i) => (
               <motion.div
-                key={ns.label}
+                key={s.label}
                 initial={{ opacity: 0, x: -12 }}
                 whileInView={{ opacity: 1, x: 0 }}
                 viewport={{ once: true }}
-                transition={{ duration: 0.4, delay: ns.delay }}
+                transition={{ duration: 0.4, delay: s.delay }}
                 className="flex items-center gap-0"
               >
                 <FlowNode
-                  label={ns.label}
-                  color={ns.color}
+                  label={s.label}
+                  color={s.color}
                   size="sm"
                   pulse={i === 0}
-                  delay={ns.delay}
+                  delay={s.delay}
                 />
-                <FlowLine length={48} color={ns.color} delay={ns.delay + 0.2} />
+                <FlowLine length={48} color={s.color} delay={s.delay + 0.2} />
                 <FlowNode
-                  label={backends[i].label}
-                  color={backends[i].color}
+                  label={s.target}
+                  color={s.color}
                   size="sm"
-                  delay={backends[i].delay}
+                  delay={s.delay + 0.3}
                 />
               </motion.div>
             ))}
@@ -76,15 +78,15 @@ function KeyspaceVisualization() {
           <div className="flex items-center gap-4 text-[10px] text-fd-muted-foreground">
             <div className="flex items-center gap-1.5">
               <div className="size-2 rounded-full bg-blue-500" />
-              <span>Cache</span>
+              <span>Active</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="size-2 rounded-full bg-green-500" />
-              <span>Sessions</span>
+              <span>Streaming</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="size-2 rounded-full bg-purple-500" />
-              <span>Config</span>
+              <span>Queued</span>
             </div>
           </div>
         </div>
@@ -99,8 +101,8 @@ function KeyspaceVisualization() {
         className="mt-4"
       >
         <CodeBlock
-          code={kvCode}
-          filename="kv.go"
+          code={streamCode}
+          filename="stream.go"
           showLineNumbers={false}
           className="text-xs"
         />
@@ -109,8 +111,8 @@ function KeyspaceVisualization() {
   );
 }
 
-// ─── KV Showcase Section ─────────────────────────────────────
-export function KVShowcase() {
+// ─── Streaming Showcase Section ─────────────────────────────
+export function StreamingShowcase() {
   return (
     <section className="relative w-full py-20 sm:py-28 overflow-hidden">
       {/* Background */}
@@ -118,34 +120,34 @@ export function KVShowcase() {
 
       <div className="container max-w-(--fd-layout-width) mx-auto px-4 sm:px-6">
         <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 items-center">
-          {/* Left: Visual (mirrored from CRDT — visual on left) */}
+          {/* Left: Visual */}
           <div className="relative">
-            <KeyspaceVisualization />
+            <StreamingVisualization />
           </div>
 
           {/* Right: Text content */}
           <div className="flex flex-col">
             <SectionHeader
-              badge="KV Store"
-              title="Universal key-value storage."
-              description="One interface, five production-grade backends. Swap between Redis, Memcached, DynamoDB, BoltDB, and Badger without changing application code."
+              badge="Streaming"
+              title="Stream everything."
+              description="Chunked transfers with backpressure handling, pause/resume, and managed stream pools. Upload, download, and transfer large objects efficiently."
               align="left"
             />
 
             <div className="mt-8 space-y-5">
               <FeatureBullet
-                title="5 Backends"
-                description="Redis, Memcached, DynamoDB, BoltDB, and Badger — swap implementations anytime without code changes."
+                title="Chunked Transfers"
+                description="Configurable chunk sizes with buffered I/O. Default 8MB chunks with 32KB stream buffers for optimal throughput."
                 delay={0.2}
               />
               <FeatureBullet
-                title="Keyspaces"
-                description="Logical namespaces within a single store. Prefix-based isolation keeps cache, sessions, and config separated."
+                title="Backpressure"
+                description="Block, drop, or adaptive backpressure modes to prevent memory exhaustion during high-throughput transfers."
                 delay={0.3}
               />
               <FeatureBullet
-                title="Middleware"
-                description="Composable middleware for logging, metrics, circuit breakers, and caching layers. Stack them as needed."
+                title="Stream Pools"
+                description="Managed concurrency with configurable pool sizes, bandwidth throttling, and lifecycle hooks for progress, chunk, and completion events."
                 delay={0.4}
               />
             </div>
@@ -158,10 +160,10 @@ export function KVShowcase() {
               className="mt-8"
             >
               <a
-                href="/docs/kv/overview"
+                href="/docs/storage/streaming-engine"
                 className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 transition-colors"
               >
-                Explore KV Store
+                Explore streaming
                 <svg
                   className="size-3.5"
                   viewBox="0 0 16 16"

@@ -1,0 +1,183 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/separator"
+	"github.com/xraph/forgeui/icons"
+	"github.com/xraph/trove/extension/dashboard/components"
+	"github.com/xraph/trove/extension/model"
+)
+
+// BucketDetailData holds all data for the bucket detail page.
+type BucketDetailData struct {
+	Bucket      *model.Bucket
+	ObjectCount int
+	TotalSize   int64
+	Objects     []*model.Object
+}
+
+templ BucketDetailPage(data BucketDetailData) {
+	<div class="space-y-6">
+		<!-- Back Button -->
+		@button.Button(button.Props{
+			Variant: button.VariantGhost,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      "./buckets",
+				"hx-target":   "#content",
+				"hx-swap":     "innerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			@icons.ChevronLeft(icons.WithSize(16))
+			Back to Buckets
+		}
+		<!-- Bucket Info Card -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				<div class="flex items-center justify-between">
+					<div class="flex items-center gap-4">
+						<div class="flex h-14 w-14 items-center justify-center rounded-sm bg-primary/10 text-primary">
+							@icons.Database(icons.WithSize(28))
+						</div>
+						<div>
+							@card.Title() {
+								{ data.Bucket.Name }
+							}
+							@card.Description() {
+								<code class="text-xs">{ data.Bucket.ID }</code>
+							}
+						</div>
+					</div>
+					<div class="flex items-center gap-2">
+						@components.DriverBadgeExported(data.Bucket.Driver)
+					</div>
+				</div>
+			}
+			@card.Content() {
+				@separator.Separator()
+				<dl class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+					@components.FieldRowExported("Name", data.Bucket.Name)
+					@components.FieldRowExported("ID", data.Bucket.ID)
+					@components.FieldRowExported("Driver", data.Bucket.Driver)
+					@components.FieldRowExported("Region", data.Bucket.Region)
+					@components.FieldRowExported("Tenant Key", data.Bucket.TenantKey)
+					@components.FieldRowExported("Created", components.FormatTime(data.Bucket.CreatedAt))
+					@components.FieldRowExported("Updated", components.FormatTime(data.Bucket.UpdatedAt))
+				</dl>
+			}
+			@card.Footer() {
+				<div class="flex items-center gap-2">
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./browser?bucket_id=" + data.Bucket.ID,
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-push-url": "true",
+						},
+					}) {
+						@icons.FolderOpen(icons.WithSize(14))
+						Browse Files
+					}
+					@button.Button(button.Props{
+						Variant: button.VariantDestructive,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./buckets/detail?bucket_id=" + data.Bucket.ID + "&action=delete",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-confirm":  "Are you sure you want to delete this bucket? This action cannot be undone.",
+						},
+					}) {
+						@icons.Trash(icons.WithSize(14))
+						Delete Bucket
+					}
+				</div>
+			}
+		}
+		<!-- Stats Grid -->
+		<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+			@components.StatCard("file", "Objects", strconv.Itoa(data.ObjectCount), "In this bucket")
+			@components.StatCard("hard-drive", "Total Size", components.FormatBytes(data.TotalSize), "Storage used")
+			@components.StatCard("gauge", "Quota (Bytes)", quotaDisplay(data.Bucket.QuotaBytes), "Byte limit")
+			@components.StatCard("hash", "Quota (Objects)", quotaObjectDisplay(data.Bucket.QuotaObjects), "Object limit")
+		</div>
+		<!-- Configuration Card -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					Configuration
+				}
+			}
+			@card.Content() {
+				<div class="space-y-4">
+					<div class="flex items-center gap-4">
+						@components.BoolBadgeExported("Versioning", data.Bucket.Versioning)
+						@components.BoolBadgeExported("CAS Enabled", data.Bucket.CASEnabled)
+					</div>
+					if len(data.Bucket.DefaultMeta) > 0 {
+						<div class="space-y-2">
+							<h4 class="text-sm font-medium">Default Metadata</h4>
+							<div class="grid grid-cols-2 gap-2">
+								for k, v := range data.Bucket.DefaultMeta {
+									<div class="text-sm">
+										<span class="text-muted-foreground">{ k }:</span>
+										<span>{ v }</span>
+									</div>
+								}
+							</div>
+						</div>
+					}
+				</div>
+			}
+		}
+		<!-- Recent Objects in Bucket -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				<div class="flex items-center justify-between">
+					@card.Title() {
+						Objects
+					}
+					@button.Button(button.Props{
+						Variant: button.VariantGhost,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./objects?bucket_id=" + data.Bucket.ID,
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-push-url": "true",
+						},
+					}) {
+						View All
+					}
+				</div>
+			}
+			@card.Content() {
+				if len(data.Objects) == 0 {
+					@components.EmptyState("file", "No objects", "This bucket is empty.")
+				} else {
+					@components.ObjectTable(data.Objects)
+				}
+			}
+		}
+	</div>
+}
+
+func quotaDisplay(bytes int64) string {
+	if bytes <= 0 {
+		return "No limit"
+	}
+	return components.FormatBytes(bytes)
+}
+
+func quotaObjectDisplay(count int64) string {
+	if count <= 0 {
+		return "No limit"
+	}
+	return strconv.FormatInt(count, 10)
+}

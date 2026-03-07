@@ -1,0 +1,65 @@
+package pages
+
+import (
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/separator"
+	"github.com/xraph/trove/extension/dashboard/components"
+)
+
+// SettingsPageData holds the data for the settings page.
+type SettingsPageData struct {
+	StorageDriver string
+	BasePath      string
+	DefaultBucket string
+	CASEnabled    bool
+	Encryption    bool
+	Compression   bool
+}
+
+templ SettingsPage(data SettingsPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div>
+			<h1 class="text-3xl font-bold tracking-tight">Settings</h1>
+			<p class="text-muted-foreground mt-1">Trove storage configuration and feature flags.</p>
+		</div>
+		<!-- General Configuration -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					General Configuration
+				}
+			}
+			@card.Content() {
+				@separator.Separator()
+				<dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+					@components.FieldRowExported("Storage Driver", settingsValueOrDefault(data.StorageDriver, "memory"))
+					@components.FieldRowExported("Base Path", settingsValueOrDefault(data.BasePath, "/api/storage"))
+					@components.FieldRowExported("Default Bucket", settingsValueOrDefault(data.DefaultBucket, "default"))
+				</dl>
+			}
+		}
+		<!-- Feature Flags -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					Feature Flags
+				}
+			}
+			@card.Content() {
+				<div class="flex items-center gap-4 flex-wrap">
+					@components.BoolBadgeExported("CAS Enabled", data.CASEnabled)
+					@components.BoolBadgeExported("Encryption", data.Encryption)
+					@components.BoolBadgeExported("Compression", data.Compression)
+				</div>
+			}
+		}
+	</div>
+}
+
+func settingsValueOrDefault(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
+}

@@ -16,9 +16,9 @@ interface FeatureCard {
 // ─── Tier 1: Hero capability cards ──────────────────────────
 const heroFeatures: FeatureCard[] = [
   {
-    title: "Polyglot ORM",
+    title: "Multi-Backend Storage",
     description:
-      "Native query syntax per database with dual grove/bun tag system. Zero-reflection hot path, cached field offsets, and pooled buffers for near-raw performance.",
+      "6 storage drivers with a unified interface. Local filesystem, S3, GCS, Azure Blob, SFTP, and in-memory — swap backends without changing application code.",
     icon: (
       <svg
         className="size-5"
@@ -30,25 +30,52 @@ const heroFeatures: FeatureCard[] = [
         strokeLinejoin="round"
         aria-hidden="true"
       >
-        <ellipse cx="12" cy="5" rx="9" ry="3" />
-        <path d="M3 5v7c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
-        <path d="M3 12v7c0 1.66 4.03 3 9 3s9-1.34 9-3v-7" />
+        <path d="M12 2L2 7l10 5 10-5-10-5z" />
+        <path d="M2 17l10 5 10-5" />
+        <path d="M2 12l10 5 10-5" />
       </svg>
     ),
-    code: `type User struct {
-    grove.BaseModel \`grove:"table:users,alias:u"\`
+    code: `drv := localdriver.New()
+drv.Open(ctx, "file:///tmp/storage")
 
-    ID    int64  \`grove:"id,pk,autoincrement"\`
-    Name  string \`grove:"name,notnull"\`
-    Email string \`grove:"email,notnull,unique"\`
-    SSN   string \`grove:"ssn,privacy:pii"\`
-}`,
-    filename: "model.go",
+t, _ := trove.Open(drv,
+    trove.WithDefaultBucket("uploads"),
+    trove.WithBackend("archive", s3drv),
+    trove.WithRoute("*.log", "archive"),
+)`,
+    filename: "storage.go",
   },
   {
-    title: "Offline-First CRDT",
+    title: "Composable Middleware",
     description:
-      "LWW-Register, PN-Counter, and OR-Set types with automatic conflict resolution. Distributed nodes modify data independently and converge without coordination.",
+      "Direction-aware, scope-aware middleware pipeline. Zstd compression, AES-256-GCM encryption, BLAKE3 deduplication, ClamAV scanning, and invisible watermarking.",
+    icon: (
+      <svg
+        className="size-5"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+      </svg>
+    ),
+    code: `t, _ := trove.Open(drv,
+    trove.WithMiddleware(
+        compress.New(),
+        encrypt.New(encrypt.WithKeyProvider(kp)),
+        dedup.New(),
+    ),
+)`,
+    filename: "middleware.go",
+  },
+  {
+    title: "Streaming Engine",
+    description:
+      "Chunked transfers with configurable sizes, backpressure handling, pause/resume, and managed stream pools. Upload, download, and bidirectional streaming modes.",
     icon: (
       <svg
         className="size-5"
@@ -64,19 +91,24 @@ const heroFeatures: FeatureCard[] = [
         <circle cx="12" cy="12" r="4" />
       </svg>
     ),
-    code: `plugin := crdt.NewPlugin(crdt.PluginConfig{
-    NodeID:    "node-1",
-    Tombstone: true,
-})
-plugin.Register("documents", crdt.LWWRegister)
-plugin.Register("likes",     crdt.PNCounter)
-plugin.Register("tags",      crdt.ORSet)`,
-    filename: "crdt.go",
+    code: `s, _ := t.Stream(ctx, "media", "video.mp4",
+    stream.Upload,
+    stream.WithChunkSize(16 * 1024 * 1024),
+    stream.OnProgress(func(p stream.Progress) {
+        log.Printf("%.1f%%", p.Percent())
+    }),
+)
+defer s.Close()`,
+    filename: "stream.go",
   },
+];
+
+// ─── Tier 2: Secondary feature cards ────────────────────────
+const secondaryFeatures: FeatureCard[] = [
   {
-    title: "Universal KV Store",
+    title: "Content-Addressable Storage",
     description:
-      "5 backends — Redis, Memcached, DynamoDB, BoltDB, and Badger. Keyspaces for logical separation, composable middleware for logging, metrics, and circuit breakers.",
+      "Store by content hash with BLAKE3, SHA-256, or XXHash. Automatic deduplication via reference counting and garbage collection support.",
     icon: (
       <svg
         className="size-5"
@@ -88,28 +120,48 @@ plugin.Register("tags",      crdt.ORSet)`,
         strokeLinejoin="round"
         aria-hidden="true"
       >
-        <path d="M7 7h10M7 12h10M7 17h6" />
-        <circle cx="4" cy="7" r="1.5" fill="currentColor" stroke="none" />
-        <circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none" />
-        <circle cx="4" cy="17" r="1.5" fill="currentColor" stroke="none" />
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       </svg>
     ),
-    code: `store := redis.New(redis.Config{Addr: ":6379"})
-cache := kv.WithKeyspace(store, "cache:")
-sessions := kv.WithKeyspace(store, "session:")
+    code: `t, _ := trove.Open(drv, trove.WithCAS(cas.BLAKE3))
 
-cache.Set(ctx, "user:123", data, 5*time.Minute)
-val, _ := cache.Get(ctx, "user:123")`,
-    filename: "kv.go",
+ref, _ := t.CAS().Store(ctx, reader)
+// ref.Hash = "blake3:a1b2c3..."
+
+obj, _ := t.CAS().Retrieve(ctx, ref.Hash)
+defer obj.Close()`,
+    filename: "cas.go",
   },
-];
-
-// ─── Tier 2: Secondary feature cards ────────────────────────
-const secondaryFeatures: FeatureCard[] = [
   {
-    title: "Multi-Database",
+    title: "Virtual Filesystem",
     description:
-      "Named database connections with DBManager and vessel DI. Connect PostgreSQL, ClickHouse, and SQLite in a single app with per-DB hooks and migrations.",
+      "io/fs.FS-compatible interface over flat object storage. Hierarchical directory view, metadata management, and standard Go file operations.",
+    icon: (
+      <svg
+        className="size-5"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+      </svg>
+    ),
+    code: `fsys := t.VFS("uploads")
+iofs := vfs.NewIOFS(ctx, fsys)
+
+// Serve files over HTTP
+http.Handle("/files",
+    http.FileServer(http.FS(iofs)))`,
+    filename: "vfs.go",
+  },
+  {
+    title: "Multi-Backend Routing",
+    description:
+      "Route objects to backends via glob patterns or custom functions. Send logs to archive storage, images to CDN-backed S3, temp files to memory.",
     icon: (
       <svg
         className="size-5"
@@ -127,77 +179,18 @@ const secondaryFeatures: FeatureCard[] = [
         <rect x="14" y="14" width="7" height="7" rx="1" />
       </svg>
     ),
-    code: `ext := extension.New(
-    extension.WithDatabase("primary", pgDrv),
-    extension.WithDatabase("analytics", chDrv),
-    extension.WithDefaultDatabase("primary"),
+    code: `t, _ := trove.Open(drv,
+    trove.WithBackend("archive", s3drv),
+    trove.WithBackend("cdn", gcsDrv),
+    trove.WithRoute("*.log", "archive"),
+    trove.WithRoute("images/*", "cdn"),
 )`,
-    filename: "multi_db.go",
+    filename: "routing.go",
   },
   {
-    title: "Privacy Hooks",
+    title: "Capability Interfaces",
     description:
-      "Hook interfaces run before every query and mutation. Inject tenant isolation, redact PII fields, or log to audit trails without authorization logic in the ORM.",
-    icon: (
-      <svg
-        className="size-5"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-      </svg>
-    ),
-    code: `func (t *TenantIsolation) BeforeQuery(
-    ctx context.Context, qc *hook.QueryContext,
-) (*hook.HookResult, error) {
-    return &hook.HookResult{
-        Decision: hook.Modify,
-        Filters: []hook.ExtraFilter{
-            {Clause: "tenant_id = $1", Args: []any{tid}},
-        },
-    }, nil
-}`,
-    filename: "hooks.go",
-  },
-  {
-    title: "Streaming & CDC",
-    description:
-      "Stream[T] is a lazy, pull-based generic iterator. Composable pipeline transforms (Map, Filter, Chunk, Reduce) and Go 1.23+ range-over-func. ChangeStream adds CDC.",
-    icon: (
-      <svg
-        className="size-5"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-      </svg>
-    ),
-    code: `s, _ := pgdb.NewSelect(&User{}).
-    Where("active = $1", true).Stream(ctx)
-defer s.Close()
-
-active := stream.Filter(s, func(u User) bool {
-    return u.Email != ""
-})
-names := stream.Map(active, func(u User) (string, error) {
-    return u.Name, nil
-})`,
-    filename: "streaming.go",
-  },
-  {
-    title: "Modular Migrations",
-    description:
-      "Go-code migrations with dependency-aware ordering. Forge extensions ship their own migrations that compose automatically across modules.",
+      "Opt-in driver capabilities: multipart uploads, presigned URLs, server-side copy, versioning, change notifications, and lifecycle rules.",
     icon: (
       <svg
         className="size-5"
@@ -214,19 +207,18 @@ names := stream.Map(active, func(u User) (string, error) {
         <path d="M6 18h12v3a1 1 0 01-1 1H7a1 1 0 01-1-1v-3z" />
       </svg>
     ),
-    code: `var Migrations = migrate.NewGroup("forge.billing",
-    migrate.DependsOn("core"),
-)
-Migrations.MustRegister(&migrate.Migration{
-    Name: "create_invoices", Version: "20240201000000",
-    Up: createInvoicesUp, Down: createInvoicesDown,
-})`,
-    filename: "migrations.go",
+    code: `if mp, ok := drv.(driver.MultipartDriver); ok {
+    upload, _ := mp.InitiateMultipart(ctx,
+        bucket, key)
+    mp.UploadPart(ctx, upload.ID, 1, part)
+    mp.CompleteMultipart(ctx, upload.ID)
+}`,
+    filename: "capabilities.go",
   },
   {
-    title: "7 Database Drivers",
+    title: "Forge Extension",
     description:
-      "PostgreSQL, MySQL, SQLite, MongoDB, Turso, ClickHouse, and Elasticsearch. Each generates native syntax while sharing the model registry and hook engine.",
+      "First-class Forge integration with REST API, ORM models, database migrations, DI container, and ecosystem hooks for Chronicle, Dispatch, and Warden.",
     icon: (
       <svg
         className="size-5"
@@ -243,19 +235,19 @@ Migrations.MustRegister(&migrate.Migration{
         <path d="M2 12l10 5 10-5" />
       </svg>
     ),
-    code: `pgdrv := pgdriver.New()
-pgdrv.Open(ctx, pgDSN)
-pgDB, _ := grove.Open(pgdrv)
-
-// Each generates native syntax
-pg := pgdriver.Unwrap(pgDB)
-pg.NewSelect(&users).Where("email ILIKE $1", p)`,
-    filename: "drivers.go",
+    code: `app := forge.New(
+    troveext.New(
+        troveext.WithDriver("local", localDrv),
+        troveext.WithDriver("s3", s3Drv),
+        troveext.WithDefaultDriver("local"),
+    ),
+)`,
+    filename: "extension.go",
   },
   {
-    title: "Observability",
+    title: "Security",
     description:
-      "Prometheus metrics, distributed tracing, and audit trail hooks. Track query latency, row counts, and log every mutation for compliance.",
+      "AES-256-GCM encryption with pluggable KeyProvider for key rotation. ClamAV-powered virus scanning on write. Invisible watermarking for PNG, JPEG, and PDF.",
     icon: (
       <svg
         className="size-5"
@@ -270,16 +262,15 @@ pg.NewSelect(&users).Where("email ILIKE $1", p)`,
         <path d="M18 20V10M12 20V4M6 20v-6" />
       </svg>
     ),
-    code: `func (a *AuditHook) AfterMutation(
-    ctx context.Context, model any,
-    oldVal, newVal any,
-) error {
-    return a.chronicle.Log(ctx, chronicle.Entry{
-        Action: "update", Table: "users",
-        UserID: auth.UserID(ctx),
-    })
-}`,
-    filename: "audit.go",
+    code: `t, _ := trove.Open(drv,
+    trove.WithMiddleware(
+        encrypt.New(
+            encrypt.WithKeyProvider(vault.Provider()),
+        ),
+        scan.New(scan.WithClamAV(clamAddr)),
+    ),
+)`,
+    filename: "security.go",
   },
 ];
 
@@ -360,8 +351,8 @@ export function FeatureBento() {
       <div className="container max-w-(--fd-layout-width) mx-auto px-4 sm:px-6">
         <SectionHeader
           badge="Capabilities"
-          title="Everything you need for data"
-          description="ORM, CRDT, key-value store, streaming, hooks, and migrations — Grove is a complete data toolkit for Go applications."
+          title="Everything you need for storage"
+          description="Drivers, middleware, streaming, CAS, VFS, routing, and security — Trove is a complete object storage toolkit for Go applications."
         />
 
         {/* Tier 1: Hero capability cards */}

@@ -6,10 +6,10 @@ import { cn } from "@/lib/cn";
 import { FeatureBullet } from "./feature-bullet";
 import { SectionHeader } from "./section-header";
 
-// ─── Cycling Query Action ───────────────────────────────────
-const pipelineActions = ["query.select", "query.insert", "hook.filter"];
+// ─── Cycling Object Action ──────────────────────────────────
+const pipelineActions = ["object.put", "object.get", "stream.upload"];
 
-function CyclingQueryAction() {
+function CyclingObjectAction() {
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
@@ -204,8 +204,8 @@ function EventRow({
   );
 }
 
-// ─── Query Pipeline Diagram ─────────────────────────────────
-function QueryPipelineDiagram() {
+// ─── Object Pipeline Diagram ────────────────────────────────
+function ObjectPipelineDiagram() {
   const [phase, setPhase] = useState(0);
 
   useEffect(() => {
@@ -231,8 +231,8 @@ function QueryPipelineDiagram() {
           {/* Pipeline stages */}
           <div className="flex items-center gap-0 flex-wrap justify-center">
             <Stage
-              label="Register"
-              sublabel={<CyclingQueryAction />}
+              label="Upload"
+              sublabel={<CyclingObjectAction />}
               color="text-blue-600 dark:text-blue-400"
               borderColor="border-blue-500/30"
               bgColor="bg-blue-500/5"
@@ -240,8 +240,8 @@ function QueryPipelineDiagram() {
             />
             <Connection color="blue" delay={0} />
             <Stage
-              label="Build"
-              sublabel="native SQL"
+              label="Middleware"
+              sublabel="pipeline"
               color="text-indigo-600 dark:text-indigo-400"
               borderColor="border-indigo-500/30"
               bgColor="bg-indigo-500/5"
@@ -249,8 +249,8 @@ function QueryPipelineDiagram() {
             />
             <Connection color="blue" delay={0.5} />
             <Stage
-              label="Execute"
-              sublabel="driver"
+              label="Driver"
+              sublabel="backend"
               color="text-blue-600 dark:text-blue-400"
               borderColor="border-blue-500/30"
               bgColor="bg-blue-500/8"
@@ -259,8 +259,8 @@ function QueryPipelineDiagram() {
             />
             <Connection color="green" delay={1.0} />
             <Stage
-              label="Scan"
-              sublabel="results"
+              label="Storage"
+              sublabel="stored"
               color="text-green-600 dark:text-green-400"
               borderColor="border-green-500/30"
               bgColor="bg-green-500/5"
@@ -274,23 +274,23 @@ function QueryPipelineDiagram() {
           {/* Event rows with outcomes */}
           <div className="flex flex-col items-start gap-2.5">
             <EventRow
-              action="tag.resolved"
+              action="mw.compress"
               status="success"
-              statusLabel={`grove:"..."`}
+              statusLabel="zstd"
               lineColor="green"
               delay={0.5}
             />
             <EventRow
-              action="query.built"
+              action="mw.encrypt"
               status={phase === 1 ? "indexed" : "processing"}
-              statusLabel={phase === 1 ? "PG Native" : "PG Native"}
+              statusLabel="AES-256"
               lineColor={phase === 1 ? "green" : "blue"}
               delay={0.6}
             />
             <EventRow
-              action="result.scanned"
+              action="obj.stored"
               status="indexed"
-              statusLabel="Zero-Copy"
+              statusLabel="S3"
               lineColor="green"
               delay={0.7}
             />
@@ -300,15 +300,15 @@ function QueryPipelineDiagram() {
           <div className="flex items-center gap-4 mt-4 text-[10px] text-fd-muted-foreground">
             <div className="flex items-center gap-1.5">
               <div className="size-2 rounded-full bg-green-500" />
-              <span>Cached</span>
+              <span>Compressed</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="size-2 rounded-full bg-blue-500" />
-              <span>Building</span>
+              <span>Processing</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="size-2 rounded-full bg-indigo-400" />
-              <span>Zero-Copy</span>
+              <span>Stored</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="size-2 rounded-full bg-red-500" />
@@ -321,7 +321,7 @@ function QueryPipelineDiagram() {
   );
 }
 
-// ─── Query Pipeline Section ─────────────────────────────────
+// ─── Object Pipeline Section ────────────────────────────────
 export function DeliveryFlowSection() {
   return (
     <section className="relative w-full py-20 sm:py-28 overflow-hidden">
@@ -333,26 +333,26 @@ export function DeliveryFlowSection() {
           {/* Left: Text content */}
           <div className="flex flex-col">
             <SectionHeader
-              badge="Query Pipeline"
-              title="From model to result."
-              description="Grove orchestrates the entire query lifecycle — tag resolution, query building, hook evaluation, execution, and result scanning."
+              badge="Object Pipeline"
+              title="From upload to storage."
+              description="Trove orchestrates the entire object lifecycle — middleware processing, backend routing, driver execution, and stream management."
               align="left"
             />
 
             <div className="mt-8 space-y-5">
               <FeatureBullet
-                title="Reflect Once, Query Fast"
-                description="Model metadata is cached at registration time using sync.Map. The hot query path has zero reflection — just cached offsets and pooled byte buffers."
+                title="Middleware Pipeline"
+                description="Data flows through composable middleware stages. Compression reduces size, encryption secures content, deduplication eliminates redundancy."
                 delay={0.2}
               />
               <FeatureBullet
-                title="Native Syntax Per Driver"
-                description="Each driver generates its database's native query language. PostgreSQL uses $1 placeholders, MySQL uses ?, and MongoDB uses native BSON filter documents."
+                title="Smart Routing"
+                description="Glob patterns and custom functions route objects to the right backend. Route logs to archive storage, images to CDN-backed S3."
                 delay={0.3}
               />
               <FeatureBullet
-                title="Privacy Hook Chain"
-                description="Hooks run before and after every query. Inject tenant isolation WHERE clauses, redact PII fields from results, or log mutations to Chronicle for audit trails."
+                title="Capability Detection"
+                description="Drivers expose optional capabilities like multipart uploads, presigned URLs, and range reads. Trove detects and uses them automatically."
                 delay={0.4}
               />
             </div>
@@ -389,7 +389,7 @@ export function DeliveryFlowSection() {
 
           {/* Right: Pipeline diagram */}
           <div className="relative">
-            <QueryPipelineDiagram />
+            <ObjectPipelineDiagram />
           </div>
         </div>
       </div>

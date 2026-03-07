@@ -1,0 +1,72 @@
+package components
+
+import (
+	"fmt"
+
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/trove/extension/model"
+)
+
+// UploadTable renders a table of upload sessions with HTMX clickable rows.
+templ UploadTable(uploads []*model.UploadSession) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Object Key
+				}
+				@table.Head() {
+					Status
+				}
+				@table.Head() {
+					Parts
+				}
+				@table.Head() {
+					Size
+				}
+				@table.Head() {
+					Expires
+				}
+				@table.Head() {
+					Created
+				}
+			}
+		}
+		@table.Body() {
+			for _, u := range uploads {
+				<tr
+					class="border-b transition-colors hover:bg-muted/50 cursor-pointer"
+					hx-get={ "./uploads/detail?upload_id=" + u.ID }
+					hx-target="#content"
+					hx-push-url="true"
+					hx-swap="innerHTML"
+				>
+					@table.Cell() {
+						<span class="font-medium font-mono text-sm">{ TruncateKey(u.ObjectKey) }</span>
+					}
+					@table.Cell() {
+						@uploadStatusBadge(u.Status)
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">
+							{ fmt.Sprintf("%d / %d", u.UploadedParts, u.TotalParts) }
+						</span>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">{ FormatBytes(u.TotalSize) }</span>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">
+							{ FormatTimeShort(u.ExpiresAt) }
+						</span>
+					}
+					@table.Cell() {
+						<span class="text-muted-foreground text-sm">
+							{ FormatDate(u.CreatedAt) }
+						</span>
+					}
+				</tr>
+			}
+		}
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/xraph/forge"
+	dashboard "github.com/xraph/forge/extensions/dashboard"
+	"github.com/xraph/forge/extensions/dashboard/contributor"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/grove/migrate"
@@ -14,6 +16,7 @@ import (
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
 	"github.com/xraph/trove/drivers/memdriver"
+	trovedash "github.com/xraph/trove/extension/dashboard"
 	extmigrate "github.com/xraph/trove/extension/migrate"
 	"github.com/xraph/trove/extension/store"
 	"github.com/xraph/trove/middleware/compress"
@@ -30,8 +33,11 @@ const (
 	ExtensionDescription = "Object storage engine with middleware, CAS, VFS, and streaming"
 )
 
-// Compile-time interface check.
-var _ forge.Extension = (*Extension)(nil)
+// Compile-time interface checks.
+var (
+	_ forge.Extension          = (*Extension)(nil)
+	_ dashboard.DashboardAware = (*Extension)(nil)
+)
 
 // Extension implements the Forge extension lifecycle for Trove.
 type Extension struct {
@@ -146,6 +152,24 @@ func (e *Extension) Trove() *trove.Trove {
 // Store returns the underlying store.
 func (e *Extension) Store() *store.Store {
 	return e.store
+}
+
+// DashboardContributor implements dashboard.DashboardAware. It returns a
+// LocalContributor that renders trove pages, widgets, and settings in the
+// Forge dashboard using templ + ForgeUI.
+func (e *Extension) DashboardContributor() contributor.LocalContributor {
+	return trovedash.New(
+		trovedash.NewManifest(),
+		e.store,
+		trovedash.ContributorConfig{
+			StorageDriver: e.config.StorageDriver,
+			BasePath:      e.config.BasePath,
+			DefaultBucket: e.config.DefaultBucket,
+			CASEnabled:    e.config.EnableCAS,
+			Encryption:    e.config.EnableEncryption,
+			Compression:   e.config.EnableCompression,
+		},
+	)
 }
 
 // --- Internal helpers ---

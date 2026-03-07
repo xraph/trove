@@ -1,0 +1,77 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/trove/extension/dashboard/components"
+	"github.com/xraph/trove/extension/model"
+)
+
+// UploadsPageData holds the data for the uploads list page.
+type UploadsPageData struct {
+	Uploads      []*model.UploadSession
+	TotalCount   int
+	StatusFilter string
+}
+
+templ UploadsPage(data UploadsPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div class="flex items-center justify-between">
+			<div class="flex items-center gap-3">
+				<h1 class="text-3xl font-bold tracking-tight">Upload Sessions</h1>
+				@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+					{ strconv.Itoa(data.TotalCount) }
+				}
+			</div>
+		</div>
+		<!-- Status Filters -->
+		<div class="flex flex-wrap items-center gap-3">
+			<div class="flex items-center gap-1 rounded-sm border p-1">
+				@uploadFilterButton("./uploads", "All", data.StatusFilter == "")
+				@uploadFilterButton("./uploads?status=pending", "Pending", data.StatusFilter == "pending")
+				@uploadFilterButton("./uploads?status=active", "Active", data.StatusFilter == "active")
+				@uploadFilterButton("./uploads?status=completed", "Completed", data.StatusFilter == "completed")
+				@uploadFilterButton("./uploads?status=aborted", "Aborted", data.StatusFilter == "aborted")
+				@uploadFilterButton("./uploads?status=expired", "Expired", data.StatusFilter == "expired")
+			</div>
+		</div>
+		<!-- Uploads Table -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Content() {
+				if len(data.Uploads) == 0 {
+					@components.EmptyState("upload", "No upload sessions", "No upload sessions match the current filters.")
+				} else {
+					@components.UploadTable(data.Uploads)
+				}
+			}
+		}
+	</div>
+}
+
+// uploadFilterButton renders a small toggle-style button for status filters.
+templ uploadFilterButton(href string, label string, active bool) {
+	if active {
+		<button
+			class="px-3 py-1 text-xs font-medium rounded-sm bg-primary text-primary-foreground"
+			hx-get={ href }
+			hx-target="#content"
+			hx-push-url="true"
+			hx-swap="innerHTML"
+		>
+			{ label }
+		</button>
+	} else {
+		<button
+			class="px-3 py-1 text-xs font-medium rounded-sm text-muted-foreground hover:bg-muted"
+			hx-get={ href }
+			hx-target="#content"
+			hx-push-url="true"
+			hx-swap="innerHTML"
+		>
+			{ label }
+		</button>
+	}
+}

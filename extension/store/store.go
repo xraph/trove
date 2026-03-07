@@ -161,6 +161,15 @@ func (s *Store) UpdateUploadSession(ctx context.Context, u *model.UploadSession)
 	return s.update(ctx, u)
 }
 
+// ListUploads returns all upload sessions.
+func (s *Store) ListUploads(ctx context.Context) ([]*model.UploadSession, error) {
+	var uploads []*model.UploadSession
+	if err := s.listAll(ctx, &uploads); err != nil {
+		return nil, fmt.Errorf("store: list uploads: %w", err)
+	}
+	return uploads, nil
+}
+
 // ListExpiredUploads returns upload sessions past their expiry time.
 func (s *Store) ListExpiredUploads(ctx context.Context) ([]*model.UploadSession, error) {
 	var uploads []*model.UploadSession
@@ -187,6 +196,15 @@ func (s *Store) GetCASEntry(ctx context.Context, hash string) (*model.CASEntry, 
 	return e, nil
 }
 
+// ListCASEntries returns all CAS entries.
+func (s *Store) ListCASEntries(ctx context.Context) ([]*model.CASEntry, error) {
+	var entries []*model.CASEntry
+	if err := s.listAll(ctx, &entries); err != nil {
+		return nil, fmt.Errorf("store: list CAS entries: %w", err)
+	}
+	return entries, nil
+}
+
 // ListUnpinnedCAS returns CAS entries eligible for GC.
 func (s *Store) ListUnpinnedCAS(ctx context.Context) ([]*model.CASEntry, error) {
 	var entries []*model.CASEntry
@@ -206,7 +224,30 @@ func (s *Store) DecrementCASRef(ctx context.Context, hash string) error {
 	return s.decrementField(ctx, &model.CASEntry{}, hash, "ref_count")
 }
 
+// --- Object Operations (cross-bucket) ---
+
+// ListAllObjects returns objects across all buckets, limited to the given count.
+func (s *Store) ListAllObjects(ctx context.Context, limit int) ([]*model.Object, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var objects []*model.Object
+	if err := s.listAllWithLimit(ctx, &objects, limit); err != nil {
+		return nil, fmt.Errorf("store: list all objects: %w", err)
+	}
+	return objects, nil
+}
+
 // --- Quota Operations ---
+
+// ListQuotas returns all quota records.
+func (s *Store) ListQuotas(ctx context.Context) ([]*model.Quota, error) {
+	var quotas []*model.Quota
+	if err := s.listAll(ctx, &quotas); err != nil {
+		return nil, fmt.Errorf("store: list quotas: %w", err)
+	}
+	return quotas, nil
+}
 
 // GetQuota retrieves quota info for a tenant.
 func (s *Store) GetQuota(ctx context.Context, tenantKey string) (*model.Quota, error) {

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
+	log "github.com/xraph/go-utils/log"
+
 	"github.com/xraph/trove/driver"
 )
 
@@ -52,7 +54,7 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, obj); err != nil {
-		h.logger.Error("failed to stream object", "error", err)
+		h.logger.Error("failed to stream object", log.Error(err))
 	}
 }
 

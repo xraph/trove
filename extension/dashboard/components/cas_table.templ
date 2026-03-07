@@ -1,0 +1,68 @@
+package components
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/trove/extension/model"
+)
+
+// CASTable renders a table of CAS entries.
+templ CASTable(entries []*model.CASEntry) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Hash
+				}
+				@table.Head() {
+					Bucket
+				}
+				@table.Head() {
+					Key
+				}
+				@table.Head() {
+					Size
+				}
+				@table.Head() {
+					Refs
+				}
+				@table.Head() {
+					Status
+				}
+				@table.Head() {
+					Created
+				}
+			}
+		}
+		@table.Body() {
+			for _, e := range entries {
+				@table.Row() {
+					@table.Cell() {
+						<code class="text-xs bg-muted px-1.5 py-0.5 rounded-sm">{ TruncateHash(e.Hash) }</code>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">{ TruncateHash(e.BucketID) }</span>
+					}
+					@table.Cell() {
+						<span class="text-sm font-mono">{ TruncateKey(e.Key) }</span>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">{ FormatBytes(e.Size) }</span>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">{ strconv.Itoa(e.RefCount) }</span>
+					}
+					@table.Cell() {
+						@pinnedBadge(e.Pinned)
+					}
+					@table.Cell() {
+						<span class="text-muted-foreground text-sm">
+							{ FormatDate(e.CreatedAt) }
+						</span>
+					}
+				}
+			}
+		}
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	log "github.com/xraph/go-utils/log"
+
 	"github.com/xraph/trove/extension/model"
 	troveid "github.com/xraph/trove/id"
 )
@@ -42,7 +44,7 @@ func (h *Handler) createBucket(w http.ResponseWriter, r *http.Request) {
 			CASEnabled: req.CASEnabled,
 		}
 		if err := h.store.CreateBucket(r.Context(), bucket); err != nil {
-			h.logger.Error("failed to record bucket in store", "error", err)
+			h.logger.Error("failed to record bucket in store", log.Error(err))
 		}
 	}
 

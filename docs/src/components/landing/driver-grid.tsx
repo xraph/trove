@@ -37,88 +37,87 @@ interface CompactDriver {
 
 const featuredDrivers: FeaturedDriver[] = [
   {
-    abbr: "PG",
-    name: "PostgreSQL",
+    abbr: "FS",
+    name: "Local Filesystem",
     description:
-      "Native $1 placeholders, JSONB operators, DISTINCT ON, and ILIKE — full Postgres dialect.",
+      "Atomic file operations with sidecar .meta.json metadata. Directory-as-bucket layout with configurable base paths.",
     color: "blue",
-    code: `pg := pgdriver.Unwrap(db)
+    code: `drv := localdriver.New()
+drv.Open(ctx, "file:///tmp/storage")
 
-users := pg.NewSelect(&User{}).
-    Where("email ILIKE $1", "%@acme.com").
-    Where("metadata->>'role' = $2", "admin").
-    OrderExpr("created_at DESC").
-    Limit(20)`,
-    filename: "postgres.go",
+t, _ := trove.Open(drv)
+
+// Store an object
+t.Put(ctx, "uploads", "photo.jpg", reader)
+
+// Retrieve it
+obj, _ := t.Get(ctx, "uploads", "photo.jpg")
+defer obj.Close()`,
+    filename: "local.go",
   },
   {
-    abbr: "MY",
-    name: "MySQL",
+    abbr: "S3",
+    name: "S3 / MinIO / R2",
     description:
-      "Backtick quoting, ? placeholders, ON DUPLICATE KEY upserts, and native JSON functions.",
+      "S3-compatible storage with multipart uploads, presigned URLs, server-side copy, and range reads.",
     color: "orange",
-    code: `my := mysqldriver.Unwrap(db)
+    code: `drv := s3driver.New()
+drv.Open(ctx, "s3://us-east-1/my-bucket",
+    s3driver.WithCredentials(key, secret),
+)
 
-_, err := my.NewInsert(&User{Name: name, Email: email}).
-    On("DUPLICATE KEY UPDATE").
-    Set("\`name\` = VALUES(\`name\`)").
-    Exec(ctx)`,
-    filename: "mysql.go",
+t, _ := trove.Open(drv)
+t.Put(ctx, "my-bucket", "data.csv", reader)`,
+    filename: "s3.go",
   },
   {
-    abbr: "MG",
-    name: "MongoDB",
+    abbr: "GC",
+    name: "Google Cloud Storage",
     description:
-      "Native BSON queries, aggregation pipelines, change streams, and embedded document support.",
+      "GCS with resumable uploads, presigned URLs, and compose-based multipart. Native IAM integration.",
     color: "green",
-    code: `mg := mongodriver.Unwrap(db)
+    code: `drv := gcsdriver.New()
+drv.Open(ctx, "gcs://my-project/my-bucket",
+    gcsdriver.WithCredentialsFile("sa.json"),
+)
 
-results := mg.NewSelect(&Order{}).
-    Where("status", "active").
-    Where("total >", 100).
-    Sort("-created_at").
-    Limit(50)`,
-    filename: "mongo.go",
+t, _ := trove.Open(drv)
+t.Put(ctx, "my-bucket", "report.pdf", reader)`,
+    filename: "gcs.go",
   },
 ];
 
 const compactDrivers: CompactDriver[] = [
   {
-    abbr: "SQ",
-    name: "SQLite",
-    description: "Embedded storage with full SQL and WAL mode",
-    color: "teal",
-  },
-  {
-    abbr: "TU",
-    name: "Turso",
-    description: "Edge-replicated SQLite with libSQL",
+    abbr: "AZ",
+    name: "Azure Blob",
+    description: "Block blob storage with SAS tokens and multipart",
     color: "purple",
   },
   {
-    abbr: "CH",
-    name: "ClickHouse",
-    description: "Columnar analytics with batch inserts",
-    color: "amber",
+    abbr: "SF",
+    name: "SFTP",
+    description: "Remote file storage over SSH",
+    color: "teal",
   },
   {
-    abbr: "ES",
-    name: "Elasticsearch",
-    description: "Full-text search with JSON DSL",
-    color: "indigo",
+    abbr: "MM",
+    name: "In-Memory",
+    description: "Ephemeral storage for testing and caching",
+    color: "amber",
   },
 ];
 
-const unifiedCode = `// One interface. Any driver. Zero changes.
-pgdrv := pgdriver.New()
-pgdrv.Open(ctx, "postgres://localhost/app")
+const unifiedCode = `// One interface. Any backend. Zero changes.
+local := localdriver.New()
+local.Open(ctx, "file:///tmp/storage")
 
-chdrv := chdriver.New()
-chdrv.Open(ctx, "clickhouse://localhost/analytics")
+s3drv := s3driver.New()
+s3drv.Open(ctx, "s3://us-east-1/my-bucket")
 
-// Same grove.Open — native syntax per driver
-pgDB, _ := grove.Open(pgdrv)
-chDB, _ := grove.Open(chdrv)`;
+// Same trove.Open — same API for every backend
+localStore, _ := trove.Open(local)
+s3Store, _ := trove.Open(s3drv)`;
 
 // ─── Color maps ─────────────────────────────────────────────
 
@@ -265,11 +264,11 @@ function UnifiedAPICard() {
           <p className="text-sm text-fd-muted-foreground leading-relaxed">
             Every driver plugs into the same{" "}
             <code className="text-xs bg-fd-muted/50 px-1.5 py-0.5 rounded font-mono">
-              grove.Open(drv)
+              trove.Open(drv)
             </code>{" "}
-            interface. Switch from PostgreSQL to ClickHouse without changing
-            application code. Models, hooks, and migrations compose across all 7
-            drivers.
+            interface. Switch from local filesystem to S3 without changing
+            application code. Middleware, routing, and streaming compose across
+            all 6 backends.
           </p>
 
           <div className="mt-4 flex flex-wrap gap-2">
@@ -309,8 +308,8 @@ export function DriverGrid() {
       <div className="container max-w-(--fd-layout-width) mx-auto px-4 sm:px-6">
         <SectionHeader
           badge="Drivers"
-          title="7 databases. One API."
-          description="Each driver generates its database's native query syntax. PostgreSQL uses $1 placeholders, MySQL uses ?, MongoDB uses native BSON — no unified DSL compromising performance."
+          title="6 backends. One API."
+          description="Each driver implements the same storage interface. Local filesystem uses atomic file operations, S3 uses multipart uploads, GCS uses resumable uploads — no unified abstraction compromising capabilities."
         />
 
         <motion.div
@@ -320,13 +319,13 @@ export function DriverGrid() {
           viewport={{ once: true, margin: "-50px" }}
           className="mt-14 grid grid-cols-1 lg:grid-cols-2 gap-4"
         >
-          {/* Row 1: PostgreSQL + MySQL */}
+          {/* Row 1: Local + S3 */}
           <FeaturedCard driver={featuredDrivers[0]} />
           <FeaturedCard driver={featuredDrivers[1]} />
 
-          {/* Row 2: MongoDB (left) + 4 compact drivers (right 2x2) */}
+          {/* Row 2: GCS (left) + 3 compact drivers (right) */}
           <FeaturedCard driver={featuredDrivers[2]} />
-          <div className="grid grid-cols-2 gap-4 content-start">
+          <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3 gap-4 content-start">
             {compactDrivers.map((d) => (
               <CompactCard key={d.abbr} driver={d} />
             ))}

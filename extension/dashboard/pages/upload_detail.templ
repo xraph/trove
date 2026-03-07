@@ -1,0 +1,223 @@
+package pages
+
+import (
+	"encoding/json"
+	"strconv"
+
+	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/separator"
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/forgeui/icons"
+	"github.com/xraph/trove/extension/dashboard/components"
+	"github.com/xraph/trove/extension/model"
+)
+
+// UploadDetailData holds all data for the upload detail page.
+type UploadDetailData struct {
+	Upload *model.UploadSession
+}
+
+templ UploadDetailPage(data UploadDetailData) {
+	<div class="space-y-6">
+		<!-- Back Button -->
+		@button.Button(button.Props{
+			Variant: button.VariantGhost,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":      "./uploads",
+				"hx-target":   "#content",
+				"hx-swap":     "innerHTML",
+				"hx-push-url": "true",
+			},
+		}) {
+			@icons.ChevronLeft(icons.WithSize(16))
+			Back to Uploads
+		}
+		<!-- Upload Info Card -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				<div class="flex items-center justify-between">
+					<div class="flex items-center gap-4">
+						<div class="flex h-14 w-14 items-center justify-center rounded-sm bg-primary/10 text-primary">
+							@icons.Upload(icons.WithSize(28))
+						</div>
+						<div>
+							@card.Title() {
+								{ data.Upload.ObjectKey }
+							}
+							@card.Description() {
+								<code class="text-xs">{ data.Upload.ID }</code>
+							}
+						</div>
+					</div>
+					<div class="flex items-center gap-2">
+						@components.UploadStatusBadgeExported(data.Upload.Status)
+					</div>
+				</div>
+			}
+			@card.Content() {
+				@separator.Separator()
+				<dl class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+					@components.FieldRowExported("ID", data.Upload.ID)
+					@components.FieldRowExported("Bucket ID", data.Upload.BucketID)
+					@components.FieldRowExported("Object Key", data.Upload.ObjectKey)
+					@components.FieldRowExported("Content Type", data.Upload.ContentType)
+					@components.FieldRowExported("Status", string(data.Upload.Status))
+					@components.FieldRowExported("Total Parts", strconv.Itoa(data.Upload.TotalParts))
+					@components.FieldRowExported("Uploaded Parts", strconv.Itoa(data.Upload.UploadedParts))
+					@components.FieldRowExported("Total Size", components.FormatBytes(data.Upload.TotalSize))
+					@components.FieldRowExported("Tenant Key", data.Upload.TenantKey)
+					@components.FieldRowExported("Expires", components.FormatTime(data.Upload.ExpiresAt))
+					@components.FieldRowExported("Created", components.FormatTime(data.Upload.CreatedAt))
+					@components.FieldRowExported("Updated", components.FormatTime(data.Upload.UpdatedAt))
+				</dl>
+			}
+			@card.Footer() {
+				<div class="flex items-center gap-2">
+					if data.Upload.Status == model.UploadStatusPending || data.Upload.Status == model.UploadStatusActive {
+						@button.Button(button.Props{
+							Variant: button.VariantDestructive,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":      "./uploads/detail?upload_id=" + data.Upload.ID + "&action=abort",
+								"hx-target":   "#content",
+								"hx-swap":     "innerHTML",
+								"hx-confirm":  "Are you sure you want to abort this upload?",
+							},
+						}) {
+							@icons.XCircle(icons.WithSize(14))
+							Abort Upload
+						}
+					}
+				</div>
+			}
+		}
+		<!-- Progress Card -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					Upload Progress
+				}
+			}
+			@card.Content() {
+				<div class="space-y-4">
+					<div class="space-y-2">
+						<div class="flex items-center justify-between text-sm">
+							<span class="text-muted-foreground">Parts Uploaded</span>
+							<span class="font-medium">{ strconv.Itoa(data.Upload.UploadedParts) } / { strconv.Itoa(data.Upload.TotalParts) }</span>
+						</div>
+						<div class="w-full bg-muted rounded-sm h-2 overflow-hidden">
+							<div
+								class={ "h-full rounded-sm transition-all", uploadProgressColor(data.Upload.Status) }
+								style={ uploadProgressWidth(data.Upload.UploadedParts, data.Upload.TotalParts) }
+							></div>
+						</div>
+					</div>
+				</div>
+			}
+		}
+		<!-- Metadata Card -->
+		if len(data.Upload.Metadata) > 0 {
+			@card.Card(card.Props{Class: "rounded-sm"}) {
+				@card.Header() {
+					<div class="flex items-center gap-3">
+						@card.Title() {
+							Metadata
+						}
+						@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+							{ strconv.Itoa(len(data.Upload.Metadata)) }
+						}
+					</div>
+				}
+				@card.Content() {
+					@uploadMetadataTable(data.Upload.Metadata)
+				}
+			}
+		}
+		<!-- Chunks Card -->
+		if len(data.Upload.Chunks) > 0 {
+			@card.Card(card.Props{Class: "rounded-sm"}) {
+				@card.Header() {
+					@card.Title() {
+						Chunk Details
+					}
+				}
+				@card.Content() {
+					@uploadChunksDisplay(data.Upload.Chunks)
+				}
+			}
+		}
+	</div>
+}
+
+// uploadMetadataTable renders key-value pairs for upload metadata.
+templ uploadMetadataTable(kv map[string]string) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Key
+				}
+				@table.Head() {
+					Value
+				}
+			}
+		}
+		@table.Body() {
+			for k, v := range kv {
+				@table.Row() {
+					@table.Cell() {
+						<code class="text-xs bg-muted px-1.5 py-0.5 rounded-sm">{ k }</code>
+					}
+					@table.Cell() {
+						<span class="text-sm">{ v }</span>
+					}
+				}
+			}
+		}
+	}
+}
+
+// uploadChunksDisplay renders the raw chunk JSON.
+templ uploadChunksDisplay(chunks json.RawMessage) {
+	<pre class="text-xs bg-muted p-4 rounded-sm overflow-x-auto">{ formatChunksJSON(chunks) }</pre>
+}
+
+func uploadProgressWidth(uploaded, total int) string {
+	if total <= 0 {
+		return "width: 0%"
+	}
+	pct := (uploaded * 100) / total
+	if pct > 100 {
+		pct = 100
+	}
+	return "width: " + strconv.Itoa(pct) + "%"
+}
+
+func uploadProgressColor(status model.UploadStatus) string {
+	switch status {
+	case model.UploadStatusCompleted:
+		return "bg-green-500"
+	case model.UploadStatusAborted, model.UploadStatusExpired:
+		return "bg-destructive"
+	default:
+		return "bg-primary"
+	}
+}
+
+func formatChunksJSON(data json.RawMessage) string {
+	if len(data) == 0 {
+		return "{}"
+	}
+	var out json.RawMessage
+	if err := json.Unmarshal(data, &out); err != nil {
+		return string(data)
+	}
+	pretty, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return string(data)
+	}
+	return string(pretty)
+}

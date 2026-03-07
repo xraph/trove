@@ -20,12 +20,12 @@ export function CTA() {
           className="max-w-2xl mx-auto text-center"
         >
           <h2 className="text-3xl font-bold tracking-tight text-fd-foreground sm:text-4xl">
-            Build data-intensive Go apps
+            Build storage-powered Go apps
           </h2>
           <p className="mt-4 text-lg text-fd-muted-foreground leading-relaxed">
-            Polyglot ORM, offline-first CRDT sync, universal KV store, and
-            privacy hooks across 7 database drivers. Add Grove to your Go
-            service in minutes.
+            Multi-backend object storage with composable middleware, streaming
+            engine, content-addressable storage, and VFS across 6 storage
+            drivers. Add Trove to your Go service in minutes.
           </p>
 
           {/* Install command */}
@@ -38,7 +38,7 @@ export function CTA() {
           >
             <span className="text-fd-muted-foreground select-none">$</span>
             <code className="text-fd-foreground">
-              go get github.com/xraph/grove
+              go get github.com/xraph/trove
             </code>
           </motion.div>
 
@@ -61,7 +61,7 @@ export function CTA() {
               Get Started
             </Link>
             <Link
-              href="/docs/guides/basic-crud"
+              href="/docs/getting-started"
               className={cn(
                 "inline-flex items-center justify-center rounded-lg px-6 py-2.5 text-sm font-medium transition-colors",
                 "border border-fd-border bg-fd-background hover:bg-fd-muted/50 text-fd-foreground",

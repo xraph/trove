@@ -1,0 +1,85 @@
+package components
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/trove/extension/model"
+)
+
+// BucketTable renders a table of buckets with HTMX clickable rows.
+templ BucketTable(buckets []*model.Bucket) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Name
+				}
+				@table.Head() {
+					Driver
+				}
+				@table.Head() {
+					Region
+				}
+				@table.Head() {
+					Versioning
+				}
+				@table.Head() {
+					CAS
+				}
+				@table.Head() {
+					Quota
+				}
+				@table.Head() {
+					Created
+				}
+			}
+		}
+		@table.Body() {
+			for _, b := range buckets {
+				<tr
+					class="border-b transition-colors hover:bg-muted/50 cursor-pointer"
+					hx-get={ "./buckets/detail?bucket_id=" + b.ID }
+					hx-target="#content"
+					hx-push-url="true"
+					hx-swap="innerHTML"
+				>
+					@table.Cell() {
+						<span class="font-medium">{ b.Name }</span>
+					}
+					@table.Cell() {
+						@driverBadge(b.Driver)
+					}
+					@table.Cell() {
+						if b.Region != "" {
+							<span class="text-sm text-muted-foreground">{ b.Region }</span>
+						} else {
+							<span class="text-sm text-muted-foreground italic">-</span>
+						}
+					}
+					@table.Cell() {
+						@boolBadge("Versioning", b.Versioning)
+					}
+					@table.Cell() {
+						@boolBadge("CAS", b.CASEnabled)
+					}
+					@table.Cell() {
+						if b.QuotaBytes > 0 {
+							<span class="text-sm text-muted-foreground">{ FormatBytes(b.QuotaBytes) }</span>
+						} else {
+							<span class="text-sm text-muted-foreground italic">No limit</span>
+						}
+					}
+					@table.Cell() {
+						<span class="text-muted-foreground text-sm">
+							{ FormatDate(b.CreatedAt) }
+						</span>
+					}
+				</tr>
+			}
+		}
+	}
+}
+
+// BucketCount is unused but satisfies potential imports.
+var _ = strconv.Itoa

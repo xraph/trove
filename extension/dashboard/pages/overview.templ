@@ -1,0 +1,167 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/components/button"
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/forgeui/icons"
+	"github.com/xraph/trove/extension/dashboard/components"
+	"github.com/xraph/trove/extension/model"
+)
+
+// OverviewStats holds aggregate counts for the overview page.
+type OverviewStats struct {
+	TotalBuckets  int
+	TotalObjects  int
+	TotalSize     int64
+	ActiveUploads int
+	CASEntries    int
+}
+
+// OverviewData holds all data for the overview page.
+type OverviewData struct {
+	Stats         OverviewStats
+	RecentObjects []*model.Object
+}
+
+templ OverviewPage(data OverviewData) {
+	<div class="space-y-8">
+		<!-- Page Header -->
+		<div>
+			<h1 class="text-3xl font-bold tracking-tight">Overview</h1>
+			<p class="text-muted-foreground mt-1">Monitor your object storage at a glance.</p>
+		</div>
+		<!-- Stats Grid -->
+		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+			@components.StatCard("database", "Buckets", strconv.Itoa(data.Stats.TotalBuckets), "Storage containers")
+			@components.StatCard("file", "Objects", strconv.Itoa(data.Stats.TotalObjects), "Stored objects")
+			@components.StatCard("hard-drive", "Storage Used", components.FormatBytes(data.Stats.TotalSize), "Total bytes")
+			@components.StatCard("upload", "Active Uploads", strconv.Itoa(data.Stats.ActiveUploads), "In progress")
+		</div>
+		<!-- Quick Actions -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					Quick Actions
+				}
+			}
+			@card.Content() {
+				<div class="flex items-center gap-3">
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./buckets",
+							"hx-target":   "#content",
+							"hx-push-url": "true",
+							"hx-swap":     "innerHTML",
+						},
+					}) {
+						@icons.Database(icons.WithSize(14))
+						View Buckets
+					}
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./browser",
+							"hx-target":   "#content",
+							"hx-push-url": "true",
+							"hx-swap":     "innerHTML",
+						},
+					}) {
+						@icons.FolderOpen(icons.WithSize(14))
+						File Browser
+					}
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./objects",
+							"hx-target":   "#content",
+							"hx-push-url": "true",
+							"hx-swap":     "innerHTML",
+						},
+					}) {
+						@icons.File(icons.WithSize(14))
+						View Objects
+					}
+				</div>
+			}
+		}
+		<!-- Recent Objects -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				<div class="flex items-center justify-between">
+					@card.Title() {
+						Recent Objects
+					}
+					@button.Button(button.Props{
+						Variant: button.VariantGhost,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./objects",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+							"hx-push-url": "true",
+						},
+					}) {
+						View All
+					}
+				</div>
+			}
+			@card.Content() {
+				if len(data.RecentObjects) == 0 {
+					@components.EmptyState("file", "No objects yet", "Store your first object to see it here.")
+				} else {
+					@table.Table() {
+						@table.Header() {
+							@table.Row() {
+								@table.Head() {
+									Key
+								}
+								@table.Head() {
+									Size
+								}
+								@table.Head() {
+									Content Type
+								}
+								@table.Head() {
+									Created
+								}
+							}
+						}
+						@table.Body() {
+							for _, o := range data.RecentObjects {
+								<tr
+									class="border-b transition-colors hover:bg-muted/50 cursor-pointer"
+									hx-get={ "./objects/detail?object_id=" + o.ID }
+									hx-target="#content"
+									hx-push-url="true"
+									hx-swap="innerHTML"
+								>
+									@table.Cell() {
+										<span class="font-medium font-mono text-sm">{ components.TruncateKey(o.Key) }</span>
+									}
+									@table.Cell() {
+										<span class="text-sm text-muted-foreground">{ components.FormatBytes(o.Size) }</span>
+									}
+									@table.Cell() {
+										<span class="text-sm text-muted-foreground">{ o.ContentType }</span>
+									}
+									@table.Cell() {
+										<span class="text-muted-foreground text-sm">
+											{ components.FormatDate(o.CreatedAt) }
+										</span>
+									}
+								</tr>
+							}
+						}
+					}
+				}
+			}
+		}
+	</div>
+}

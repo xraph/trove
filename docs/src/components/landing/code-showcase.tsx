@@ -4,92 +4,74 @@ import { motion } from "framer-motion";
 import { CodeBlock } from "./code-block";
 import { SectionHeader } from "./section-header";
 
-const pgCode = `package main
+const localCode = `package main
 
 import (
   "context"
   "fmt"
+  "strings"
 
-  "github.com/xraph/grove"
-  "github.com/xraph/grove/drivers/pgdriver"
+  "github.com/xraph/trove"
+  "github.com/xraph/trove/drivers/localdriver"
 )
-
-type User struct {
-  grove.BaseModel \`grove:"table:users,alias:u"\`
-
-  ID        int64     \`grove:"id,pk,autoincrement"\`
-  Name      string    \`grove:"name,notnull"\`
-  Email     string    \`grove:"email,notnull,unique"\`
-  Role      string    \`grove:"role,default:'user'"\`
-  Metadata  JSONMap   \`grove:"metadata,type:jsonb"\`
-}
 
 func main() {
   ctx := context.Background()
 
   // Create and open the driver
-  pgdb := pgdriver.New()
-  pgdb.Open(ctx, "postgres://user:pass@localhost/mydb")
+  drv := localdriver.New()
+  drv.Open(ctx, "file:///tmp/storage")
 
-  // Pass connected driver to Grove
-  db, _ := grove.Open(pgdb)
-  defer db.Close()
+  // Pass connected driver to Trove
+  t, _ := trove.Open(drv,
+    trove.WithDefaultBucket("uploads"),
+  )
+  defer t.Close(ctx)
 
-  // Use typed driver for queries
-  pg := pgdriver.Unwrap(db)
-  var users []User
-  _ = pg.NewSelect(&users).
-    Where("email ILIKE $1", "%@example.com").
-    Where("metadata->>'tier' = $2", "premium").
-    DistinctOn("email").
-    OrderExpr("email, created_at DESC").
-    Limit(50).
-    Scan(ctx)
-  fmt.Printf("found %d users\\n", len(users))
+  // Store an object
+  t.Put(ctx, "uploads", "hello.txt",
+    strings.NewReader("Hello, Trove!"))
+
+  // Retrieve it
+  obj, _ := t.Get(ctx, "uploads", "hello.txt")
+  defer obj.Close()
+  fmt.Printf("stored %d bytes\\n", obj.Size)
 }`;
 
-const mongoCode = `package main
+const s3Code = `package main
 
 import (
   "context"
   "fmt"
+  "strings"
 
-  "github.com/xraph/grove"
-  "github.com/xraph/grove/drivers/mongodriver"
-  "go.mongodb.org/mongo-driver/bson"
+  "github.com/xraph/trove"
+  "github.com/xraph/trove/drivers/s3driver"
 )
-
-type User struct {
-  grove.BaseModel \`grove:"table:users"\`
-
-  ID    string \`grove:"_id,pk"\`
-  Name  string \`grove:"name,notnull"\`
-  Email string \`grove:"email,notnull,unique"\`
-  Role  string \`grove:"role"\`
-}
 
 func main() {
   ctx := context.Background()
 
   // Create and open the driver
-  mgdrv := mongodriver.New()
-  mgdrv.Open(ctx, "mongodb://localhost:27017/mydb")
+  drv := s3driver.New()
+  drv.Open(ctx, "s3://us-east-1/my-bucket",
+    s3driver.WithCredentials(key, secret),
+  )
 
-  // Pass connected driver to Grove
-  db, _ := grove.Open(mgdrv)
-  defer db.Close()
+  // Same API, different backend
+  t, _ := trove.Open(drv,
+    trove.WithDefaultBucket("my-bucket"),
+  )
+  defer t.Close(ctx)
 
-  mgdb := mongodriver.Unwrap(db)
-  var users []User
-  _ = mgdb.NewFind(&users).
-    Filter(bson.M{
-      "email": bson.M{"$regex": "@example.com$"},
-      "role":  bson.M{"$in": bson.A{"admin", "mod"}},
-    }).
-    Sort(bson.D{{"email", 1}, {"created_at", -1}}).
-    Limit(50).
-    Scan(ctx)
-  fmt.Printf("found %d users\\n", len(users))
+  // Store an object
+  t.Put(ctx, "my-bucket", "hello.txt",
+    strings.NewReader("Hello, Trove!"))
+
+  // Retrieve it
+  obj, _ := t.Get(ctx, "my-bucket", "hello.txt")
+  defer obj.Close()
+  fmt.Printf("stored %d bytes\\n", obj.Size)
 }`;
 
 export function CodeShowcase() {
@@ -98,12 +80,12 @@ export function CodeShowcase() {
       <div className="container max-w-(--fd-layout-width) mx-auto px-4 sm:px-6">
         <SectionHeader
           badge="Developer Experience"
-          title="Native syntax. Maximum performance."
-          description="Write PostgreSQL queries that read like PostgreSQL and MongoDB queries that read like MongoDB. Grove respects each database's native idioms."
+          title="Same API. Any backend."
+          description="Write storage code that works with local filesystem and deploy to S3 without changing a single line. Trove's unified interface means your code is backend-agnostic."
         />
 
         <div className="mt-14 grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* PostgreSQL side */}
+          {/* Local Filesystem side */}
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             whileInView={{ opacity: 1, x: 0 }}
@@ -113,13 +95,13 @@ export function CodeShowcase() {
             <div className="mb-3 flex items-center gap-2">
               <div className="size-2 rounded-full bg-blue-500" />
               <span className="text-xs font-medium text-fd-muted-foreground uppercase tracking-wider">
-                PostgreSQL
+                Local Filesystem
               </span>
             </div>
-            <CodeBlock code={pgCode} filename="postgres.go" />
+            <CodeBlock code={localCode} filename="local.go" />
           </motion.div>
 
-          {/* MongoDB side */}
+          {/* Amazon S3 side */}
           <motion.div
             initial={{ opacity: 0, x: 20 }}
             whileInView={{ opacity: 1, x: 0 }}
@@ -129,10 +111,10 @@ export function CodeShowcase() {
             <div className="mb-3 flex items-center gap-2">
               <div className="size-2 rounded-full bg-indigo-500" />
               <span className="text-xs font-medium text-fd-muted-foreground uppercase tracking-wider">
-                MongoDB
+                Amazon S3
               </span>
             </div>
-            <CodeBlock code={mongoCode} filename="mongo.go" />
+            <CodeBlock code={s3Code} filename="s3.go" />
           </motion.div>
         </div>
       </div>

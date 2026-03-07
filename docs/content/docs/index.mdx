@@ -1,56 +1,61 @@
 ---
-title: "Grove: A Polyglot Go ORM"
-description: "Grove is a high-performance Go ORM with native query syntax per database, dual tag system, modular migrations, and privacy hooks."
+title: "Trove: Multi-Backend Object Storage for Go"
+description: "Trove is a multi-backend object storage engine for Go with composable middleware, streaming engine, content-addressable storage, and virtual filesystem support."
 ---
 
 import { Cards, Card } from "fumadocs-ui/components/card";
 
-Grove is a polyglot Go ORM that generates native query syntax for each database driver. It answers the fundamental question: **"How do I access my data with near-raw performance and maximum flexibility?"**
+Trove is a multi-backend object storage engine for Go that delivers a unified API across storage backends. It answers the fundamental question: **"How do I store and retrieve objects with maximum flexibility and zero vendor lock-in?"**
 
-Grove supports multiple database backends through dedicated drivers:
+Trove supports multiple storage backends through dedicated drivers:
 
-- **PostgreSQL** — Native `$1` placeholders, `DISTINCT ON`, `FOR UPDATE`, JSONB operators
-- **MySQL** — Backtick quoting, `ON DUPLICATE KEY UPDATE`, `USE INDEX` hints
-- **SQLite** — Lightweight embedded database with `INSERT OR REPLACE`
-- **MongoDB** — Native BSON filter documents, aggregation pipelines
+- **Local Filesystem** — Atomic file operations with sidecar `.meta.json` metadata
+- **In-Memory** — Ephemeral storage for testing and caching
+- **Amazon S3** — S3-compatible storage (AWS, MinIO, R2, DigitalOcean Spaces)
+- **Google Cloud Storage** — GCS with resumable uploads and compose-based multipart
+- **Azure Blob** — Block blob storage with SAS tokens and multipart staging
+- **SFTP** — Remote file storage over SSH with directory-as-bucket layout
 
 ## Key Features
 
-- **Native Query Syntax** — Each driver generates queries in its database's native idiom
-- **Dual Tag System** — `grove:"..."` tags with `bun:"..."` fallback for zero-cost migration
-- **Near-Raw Performance** — Zero reflection at query time, pooled buffers, cached metadata
-- **Modular Migrations** — Go-code migrations with multi-module dependency ordering
-- **Privacy Hooks** — Pre/post query hooks for tenant isolation, PII redaction, and audit logging
-- **Key-Value Store** — Command-oriented KV access layer with Redis, Memcached, DynamoDB, BoltDB, and Badger drivers
-- **Object Storage** — Multi-backend object storage with local filesystem, in-memory, S3, and GCS drivers, plus multi-backend routing
-- **Forge Integration** — First-class Forge extension with DI, migrations, and hook wiring
+- **Unified Storage API** — Same `Put`, `Get`, `Delete`, `Head`, `List`, `Copy` operations across all backends
+- **Composable Middleware** — Direction-aware pipeline with compression (zstd), encryption (AES-256-GCM), deduplication (BLAKE3), virus scanning (ClamAV), and watermarking
+- **Streaming Engine** — Chunked transfers with configurable sizes, backpressure handling, pause/resume, and managed stream pools
+- **Content-Addressable Storage** — Store by content hash with BLAKE3, SHA-256, or XXHash, plus reference counting and garbage collection
+- **Virtual Filesystem** — `io/fs.FS`-compatible interface for hierarchical access over flat object storage
+- **Multi-Backend Routing** — Glob patterns and custom functions to route objects to the right backend
+- **Capability Interfaces** — Opt-in driver capabilities for multipart, presigned URLs, server-side copy, versioning, and notifications
+- **Forge Integration** — First-class Forge extension with REST API, ORM models, migrations, and ecosystem hooks
 
 ## Quick Example
 
 ```go
-// Create and open the driver, then pass it to Grove
-pgdb := pgdriver.New()
-pgdb.Open(ctx, "postgres://user:pass@localhost/mydb", driver.WithPoolSize(20))
-db, _ := grove.Open(pgdb)
+// Create and open the driver, then pass it to Trove
+drv := localdriver.New()
+drv.Open(ctx, "file:///tmp/storage")
 
-// Access the typed PG query builder via Unwrap
-pg := pgdriver.Unwrap(db)
-var users []User
-err := pg.NewSelect(&users).
-    Where("email ILIKE $1", "%@example.com").
-    Where("role = $2", "admin").
-    OrderExpr("created_at DESC").
-    Limit(50).
-    Scan(ctx)
+t, _ := trove.Open(drv,
+    trove.WithDefaultBucket("uploads"),
+    trove.WithMiddleware(
+        compress.New(),
+        encrypt.New(encrypt.WithKeyProvider(kp)),
+    ),
+)
+defer t.Close(ctx)
+
+// Store and retrieve objects
+t.Put(ctx, "uploads", "photo.jpg", reader)
+obj, _ := t.Get(ctx, "uploads", "photo.jpg")
+defer obj.Close()
 ```
 
 ## Next Steps
 
 <Cards>
-  <Card title="Getting Started" href="/docs/getting-started" description="Install Grove and run your first query in under 5 minutes." />
-  <Card title="Architecture" href="/docs/architecture" description="Understand the package structure, driver interface, and query pipeline." />
-  <Card title="Dual Tag System" href="/docs/concepts/dual-tags" description="Learn how grove and bun tags work together for zero-cost migration." />
-  <Card title="PostgreSQL Driver" href="/docs/drivers/postgres" description="Get started with the PostgreSQL driver and native PG syntax." />
-  <Card title="Key-Value Store" href="/docs/kv/overview" description="Command-oriented KV access with Redis, Memcached, DynamoDB, BoltDB, and Badger." />
-  <Card title="Object Storage" href="/docs/storage" description="Multi-backend object storage with local, in-memory, S3, and GCS drivers." />
+  <Card title="Getting Started" href="/docs/getting-started" description="Install Trove and store your first object in under 5 minutes." />
+  <Card title="Architecture" href="/docs/architecture" description="Understand the package structure, driver interface, and middleware pipeline." />
+  <Card title="Storage Drivers" href="/docs/storage" description="Learn about the 6 storage backends and their capabilities." />
+  <Card title="Middleware" href="/docs/storage/middleware" description="Composable middleware for compression, encryption, deduplication, and more." />
+  <Card title="Streaming Engine" href="/docs/storage/streaming-engine" description="Chunked transfers with backpressure, pause/resume, and stream pools." />
+  <Card title="Virtual Filesystem" href="/docs/storage/vfs" description="io/fs.FS-compatible interface over flat object storage." />
 </Cards>

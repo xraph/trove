@@ -168,6 +168,26 @@ func (s *Store) listUnpinned(ctx context.Context, dest *[]*model.CASEntry) error
 	return fmt.Errorf("store: list unpinned not supported for this driver")
 }
 
+func (s *Store) listAll(ctx context.Context, dest any) error {
+	if s.pg != nil {
+		return s.pg.NewSelect(dest).
+			OrderExpr("created_at DESC").
+			Scan(ctx)
+	}
+	return fmt.Errorf("store: list all not supported for this driver")
+}
+
+func (s *Store) listAllWithLimit(ctx context.Context, dest any, limit int) error {
+	if s.pg != nil {
+		return s.pg.NewSelect(dest).
+			Where("deleted_at IS NULL").
+			OrderExpr("created_at DESC").
+			Limit(limit).
+			Scan(ctx)
+	}
+	return fmt.Errorf("store: list all with limit not supported for this driver")
+}
+
 func (s *Store) updateQuotaCounters(ctx context.Context, tenantKey string, deltaBytes, deltaObjects int64) error {
 	if s.pg != nil {
 		_, err := s.pg.NewUpdate((*model.Quota)(nil)).

@@ -10,41 +10,40 @@ const footerLinks = {
     { label: "Architecture", href: "/docs/architecture" },
     { label: "Forge Extension", href: "/docs/integration/forge-extension" },
   ],
-  Drivers: [
-    { label: "PostgreSQL", href: "/docs/drivers/postgres" },
-    { label: "MySQL", href: "/docs/drivers/mysql" },
-    { label: "SQLite", href: "/docs/drivers/sqlite" },
-    { label: "MongoDB", href: "/docs/drivers/mongodb" },
-    { label: "Turso", href: "/docs/drivers/turso" },
-    { label: "ClickHouse", href: "/docs/drivers/clickhouse" },
-    { label: "Elasticsearch", href: "/docs/drivers/elasticsearch" },
+  "Storage Drivers": [
+    { label: "Local Filesystem", href: "/docs/storage/drivers/local" },
+    { label: "Amazon S3", href: "/docs/storage/drivers/s3" },
+    { label: "Google Cloud Storage", href: "/docs/storage/drivers/gcs" },
+    { label: "Azure Blob", href: "/docs/storage/drivers/azure" },
+    { label: "SFTP", href: "/docs/storage/drivers/sftp" },
+    { label: "In-Memory", href: "/docs/storage/drivers/memory" },
   ],
   Features: [
-    { label: "CRDT", href: "/docs/crdt/overview" },
-    { label: "Key-Value Store", href: "/docs/kv/overview" },
-    { label: "Migrations", href: "/docs/migrations/overview" },
-    { label: "Privacy Hooks", href: "/docs/hooks/overview" },
-    { label: "Streaming", href: "/docs/streaming/overview" },
+    { label: "Middleware", href: "/docs/storage/middleware" },
+    { label: "Streaming Engine", href: "/docs/storage/streaming-engine" },
+    { label: "Content-Addressable Storage", href: "/docs/storage/cas" },
+    { label: "Virtual Filesystem", href: "/docs/storage/vfs" },
+    { label: "Multi-Backend Routing", href: "/docs/storage/transport" },
   ],
   Community: [
     {
       label: "GitHub",
-      href: "https://github.com/xraph/grove",
+      href: "https://github.com/xraph/trove",
       external: true,
     },
     {
       label: "Issues",
-      href: "https://github.com/xraph/grove/issues",
+      href: "https://github.com/xraph/trove/issues",
       external: true,
     },
     {
       label: "Discussions",
-      href: "https://github.com/xraph/grove/discussions",
+      href: "https://github.com/xraph/trove/discussions",
       external: true,
     },
     {
       label: "Contributing",
-      href: "https://github.com/xraph/grove/blob/main/CONTRIBUTING.md",
+      href: "https://github.com/xraph/trove/blob/main/CONTRIBUTING.md",
       external: true,
     },
   ],
@@ -60,16 +59,17 @@ export function Footer() {
           <div className="col-span-2 md:col-span-1">
             <Link href="/" className="inline-flex items-center gap-2 mb-4">
               <ThemedLogo />
-              <span className="font-bold text-lg">Grove</span>
+              <span className="font-bold text-lg">Trove</span>
             </Link>
             <p className="text-sm text-fd-muted-foreground leading-relaxed max-w-xs">
-              A complete Go data toolkit — polyglot ORM, CRDT sync, key-value
-              store, streaming, and privacy hooks across 7 database drivers.
+              Multi-backend object storage for Go — composable middleware,
+              streaming engine, CAS, VFS, and 6 storage drivers. Part of the
+              Forge ecosystem.
             </p>
             {/* Social links */}
             <div className="flex items-center gap-3 mt-6">
               <a
-                href="https://github.com/xraph/grove"
+                href="https://github.com/xraph/trove"
                 target="_blank"
                 rel="noreferrer"
                 className="text-fd-muted-foreground hover:text-fd-foreground transition-colors"

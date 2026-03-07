@@ -1,11 +1,11 @@
 import { CodeShowcase } from "@/components/landing/code-showcase";
-import { CRDTShowcase } from "@/components/landing/crdt-showcase";
 import { CTA } from "@/components/landing/cta";
 import { DeliveryFlowSection } from "@/components/landing/delivery-flow-section";
 import { DriverGrid } from "@/components/landing/driver-grid";
 import { FeatureBento } from "@/components/landing/feature-bento";
 import { Hero } from "@/components/landing/hero";
-import { KVShowcase } from "@/components/landing/kv-showcase";
+import { MiddlewareShowcase } from "@/components/landing/middleware-showcase";
+import { StreamingShowcase } from "@/components/landing/streaming-showcase";
 
 export default function HomePage() {
   return (
@@ -13,8 +13,8 @@ export default function HomePage() {
       <Hero />
       <DriverGrid />
       <FeatureBento />
-      <CRDTShowcase />
-      <KVShowcase />
+      <MiddlewareShowcase />
+      <StreamingShowcase />
       <DeliveryFlowSection />
       <CodeShowcase />
       <CTA />

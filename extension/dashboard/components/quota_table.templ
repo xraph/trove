@@ -1,0 +1,105 @@
+package components
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/trove/extension/model"
+)
+
+// QuotaTable renders a table of quotas with usage bars.
+templ QuotaTable(quotas []*model.Quota) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Tenant
+				}
+				@table.Head() {
+					Storage Used
+				}
+				@table.Head() {
+					Usage
+				}
+				@table.Head() {
+					Objects
+				}
+				@table.Head() {
+					Updated
+				}
+			}
+		}
+		@table.Body() {
+			for _, q := range quotas {
+				@table.Row() {
+					@table.Cell() {
+						<span class="font-medium">{ q.TenantKey }</span>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">
+							{ FormatBytes(q.UsedBytes) }
+							if q.LimitBytes > 0 {
+								{ " / " + FormatBytes(q.LimitBytes) }
+							}
+						</span>
+					}
+					@table.Cell() {
+						@quotaBar(q.UsedBytes, q.LimitBytes)
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">
+							{ strconv.FormatInt(q.ObjectCount, 10) }
+							if q.LimitObjects > 0 {
+								{ " / " + strconv.FormatInt(q.LimitObjects, 10) }
+							}
+						</span>
+					}
+					@table.Cell() {
+						<span class="text-muted-foreground text-sm">
+							{ FormatTimeShort(q.UpdatedAt) }
+						</span>
+					}
+				}
+			}
+		}
+	}
+}
+
+// quotaBar renders a usage progress bar.
+templ quotaBar(used, limit int64) {
+	if limit > 0 {
+		<div class="w-24 bg-muted rounded-sm h-2">
+			<div
+				class={ "h-2 rounded-sm", quotaBarColor(used, limit) }
+				style={ fmt.Sprintf("width: %.0f%%", quotaPercent(used, limit)) }
+			></div>
+		</div>
+	} else {
+		<span class="text-xs text-muted-foreground italic">No limit</span>
+	}
+}
+
+// quotaPercent calculates the percentage used.
+func quotaPercent(used, limit int64) float64 {
+	if limit <= 0 {
+		return 0
+	}
+	pct := float64(used) / float64(limit) * 100
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
+// quotaBarColor returns CSS classes for the progress bar based on usage.
+func quotaBarColor(used, limit int64) string {
+	pct := quotaPercent(used, limit)
+	if pct >= 90 {
+		return "bg-destructive"
+	}
+	if pct >= 70 {
+		return "bg-yellow-500"
+	}
+	return "bg-primary"
+}

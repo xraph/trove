@@ -1,0 +1,8 @@
+package components
+
+// PluginSections renders a list of plugin-contributed templ components.
+templ PluginSections(sections []templ.Component) {
+	for _, section := range sections {
+		@section
+	}
+}

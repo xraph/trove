@@ -1,0 +1,75 @@
+package pages
+
+import (
+	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/trove/extension/dashboard/components"
+	"github.com/xraph/trove/extension/model"
+)
+
+// BrowserPageData holds the data for the file browser page.
+type BrowserPageData struct {
+	BucketID    string
+	Prefix      string
+	Entries     []components.BrowserEntry
+	Breadcrumbs []components.Breadcrumb
+	Buckets     []*model.Bucket
+}
+
+templ BrowserPage(data BrowserPageData) {
+	<div class="space-y-6">
+		<!-- Header -->
+		<div>
+			<h1 class="text-3xl font-bold tracking-tight">File Browser</h1>
+			<p class="text-muted-foreground mt-1">Browse and manage objects in your storage buckets.</p>
+		</div>
+		<!-- Bucket Selector -->
+		if len(data.Buckets) > 0 {
+			<div class="flex flex-wrap items-center gap-3">
+				<div class="flex items-center gap-1 rounded-sm border p-1">
+					@browserBucketButton("./browser", "All Buckets", data.BucketID == "")
+					for _, b := range data.Buckets {
+						@browserBucketButton("./browser?bucket_id="+b.ID, b.Name, data.BucketID == b.ID)
+					}
+				</div>
+			</div>
+		}
+		<!-- File Browser or Select Prompt -->
+		if data.BucketID == "" {
+			@card.Card(card.Props{Class: "rounded-sm"}) {
+				@card.Content() {
+					@components.EmptyState("folder-open", "Select a bucket", "Choose a bucket above to browse its contents.")
+				}
+			}
+		} else {
+			<!-- Upload Drop Zone -->
+			@components.UploadDropZone(data.BucketID, data.Prefix)
+			<!-- File Browser -->
+			@components.FileBrowser(data.BucketID, data.Prefix, data.Entries, data.Breadcrumbs)
+		}
+	</div>
+}
+
+// browserBucketButton renders a small toggle-style button for bucket selection.
+templ browserBucketButton(href string, label string, active bool) {
+	if active {
+		<button
+			class="px-3 py-1 text-xs font-medium rounded-sm bg-primary text-primary-foreground"
+			hx-get={ href }
+			hx-target="#content"
+			hx-push-url="true"
+			hx-swap="innerHTML"
+		>
+			{ label }
+		</button>
+	} else {
+		<button
+			class="px-3 py-1 text-xs font-medium rounded-sm text-muted-foreground hover:bg-muted"
+			hx-get={ href }
+			hx-target="#content"
+			hx-push-url="true"
+			hx-swap="innerHTML"
+		>
+			{ label }
+		</button>
+	}
+}

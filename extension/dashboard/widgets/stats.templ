@@ -1,0 +1,42 @@
+package widgets
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/icons"
+)
+
+// StatsWidgetData holds the data for the storage stats widget.
+type StatsWidgetData struct {
+	TotalBuckets  int
+	TotalObjects  int
+	TotalSize     string
+	ActiveUploads int
+}
+
+templ StatsWidget(data StatsWidgetData) {
+	<div class="grid grid-cols-2 gap-4 p-4">
+		@statItem("Buckets", strconv.Itoa(data.TotalBuckets)) {
+			@icons.Database(icons.WithSize(16))
+		}
+		@statItem("Objects", strconv.Itoa(data.TotalObjects)) {
+			@icons.File(icons.WithSize(16))
+		}
+		@statItem("Storage", data.TotalSize) {
+			@icons.HardDrive(icons.WithSize(16))
+		}
+		@statItem("Uploads", strconv.Itoa(data.ActiveUploads)) {
+			@icons.Upload(icons.WithSize(16))
+		}
+	</div>
+}
+
+templ statItem(label, value string) {
+	<div class="space-y-1">
+		<div class="flex items-center gap-1.5 text-muted-foreground">
+			{ children... }
+			<span class="text-xs">{ label }</span>
+		</div>
+		<p class="text-2xl font-bold">{ value }</p>
+	</div>
+}

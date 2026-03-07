@@ -1,0 +1,60 @@
+package components
+
+import (
+	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/trove/extension/model"
+)
+
+// ObjectTable renders a table of objects with HTMX clickable rows.
+templ ObjectTable(objects []*model.Object) {
+	@table.Table() {
+		@table.Header() {
+			@table.Row() {
+				@table.Head() {
+					Key
+				}
+				@table.Head() {
+					Size
+				}
+				@table.Head() {
+					Content Type
+				}
+				@table.Head() {
+					Driver
+				}
+				@table.Head() {
+					Created
+				}
+			}
+		}
+		@table.Body() {
+			for _, o := range objects {
+				<tr
+					class="border-b transition-colors hover:bg-muted/50 cursor-pointer"
+					hx-get={ "./objects/detail?object_id=" + o.ID }
+					hx-target="#content"
+					hx-push-url="true"
+					hx-swap="innerHTML"
+				>
+					@table.Cell() {
+						<span class="font-medium font-mono text-sm">{ TruncateKey(o.Key) }</span>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">{ FormatBytes(o.Size) }</span>
+					}
+					@table.Cell() {
+						<span class="text-sm text-muted-foreground">{ o.ContentType }</span>
+					}
+					@table.Cell() {
+						@driverBadge(o.Driver)
+					}
+					@table.Cell() {
+						<span class="text-muted-foreground text-sm">
+							{ FormatDate(o.CreatedAt) }
+						</span>
+					}
+				</tr>
+			}
+		}
+	}
+}

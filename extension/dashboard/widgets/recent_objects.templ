@@ -1,0 +1,38 @@
+package widgets
+
+import (
+	"github.com/xraph/forgeui/icons"
+	"github.com/xraph/trove/extension/dashboard/components"
+	"github.com/xraph/trove/extension/model"
+)
+
+// RecentObjectsWidgetData holds the data for the recent objects widget.
+type RecentObjectsWidgetData struct {
+	Objects []*model.Object
+}
+
+templ RecentObjectsWidget(data RecentObjectsWidgetData) {
+	if len(data.Objects) == 0 {
+		<p class="text-sm text-muted-foreground p-4 text-center">No objects yet.</p>
+	} else {
+		<ul class="divide-y">
+			for _, o := range data.Objects {
+				<li
+					class="flex items-center justify-between px-4 py-2 hover:bg-muted/50 cursor-pointer transition-colors"
+					hx-get={ "./objects/detail?object_id=" + o.ID }
+					hx-target="#content"
+					hx-push-url="true"
+					hx-swap="innerHTML"
+				>
+					<div class="flex items-center gap-2 min-w-0">
+						<span class="text-muted-foreground flex-shrink-0">
+							@icons.File(icons.WithSize(14))
+						</span>
+						<span class="text-sm font-medium truncate">{ components.TruncateKey(o.Key) }</span>
+					</div>
+					<span class="text-xs text-muted-foreground flex-shrink-0 ml-2">{ components.FormatBytes(o.Size) }</span>
+				</li>
+			}
+		</ul>
+	}
+}
