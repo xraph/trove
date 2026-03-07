@@ -87,6 +87,15 @@ func (e *Extension) Init(fapp forge.App) error {
 		}
 		e.store = store.New(groveDB)
 	}
+	if e.store == nil {
+		if db, err := vessel.Inject[*grove.DB](fapp.Container()); err == nil {
+			// Auto-discover default grove.DB from container (matches authsome/cortex pattern).
+			e.store = store.New(db)
+			e.Logger().Info("trove: auto-discovered grove.DB from container",
+				forge.F("driver", db.Driver().Name()),
+			)
+		}
+	}
 
 	// Run migrations.
 	if e.store != nil && !e.config.DisableMigrate {

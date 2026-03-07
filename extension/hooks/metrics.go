@@ -1,19 +1,19 @@
 package hooks
 
 import (
-	"log/slog"
+	log "github.com/xraph/go-utils/log"
 
 	"github.com/xraph/forge"
 )
 
 // MetricsHook registers Prometheus metrics for Trove operations.
 type MetricsHook struct {
-	logger *slog.Logger
+	logger log.Logger
 }
 
 // NewMetricsHook creates a metrics hook.
 // Metrics are registered via the Forge app's metrics registry.
-func NewMetricsHook(fapp forge.App, logger *slog.Logger) *MetricsHook {
+func NewMetricsHook(fapp forge.App, logger log.Logger) *MetricsHook {
 	return &MetricsHook{logger: logger}
 }
 

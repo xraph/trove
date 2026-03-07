@@ -3,8 +3,9 @@ package handler
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
+
+	log "github.com/xraph/go-utils/log"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/extension/store"
@@ -14,14 +15,14 @@ import (
 type Handler struct {
 	trove  *trove.Trove
 	store  *store.Store
-	logger *slog.Logger
+	logger log.Logger
 	mux    *http.ServeMux
 }
 
 // New creates a new Handler.
-func New(t *trove.Trove, s *store.Store, logger *slog.Logger) *Handler {
+func New(t *trove.Trove, s *store.Store, logger log.Logger) *Handler {
 	if logger == nil {
-		logger = slog.Default()
+		logger = log.NewNoopLogger()
 	}
 	h := &Handler{
 		trove:  t,

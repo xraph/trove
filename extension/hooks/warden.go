@@ -1,8 +1,9 @@
 package hooks
 
 import (
-	"log/slog"
 	"net/http"
+
+	log "github.com/xraph/go-utils/log"
 
 	"github.com/xraph/forge"
 	"github.com/xraph/vessel"
@@ -12,12 +13,12 @@ import (
 // WardenHook provides authorization middleware using Warden.
 type WardenHook struct {
 	engine *warden.Engine
-	logger *slog.Logger
+	logger log.Logger
 }
 
 // NewWardenHook creates a Warden hook, auto-discovering the engine from DI.
 // Returns nil if Warden is not available.
-func NewWardenHook(fapp forge.App, logger *slog.Logger) *WardenHook {
+func NewWardenHook(fapp forge.App, logger log.Logger) *WardenHook {
 	eng, err := vessel.Inject[*warden.Engine](fapp.Container())
 	if err != nil {
 		if logger != nil {
@@ -70,7 +71,7 @@ func (h *WardenHook) Middleware() func(http.Handler) http.Handler {
 			})
 			if err != nil {
 				if h.logger != nil {
-					h.logger.Warn("warden check failed", "error", err)
+					h.logger.Warn("warden check failed", log.Any("error", err))
 				}
 				http.Error(w, "authorization check failed", http.StatusInternalServerError)
 				return

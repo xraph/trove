@@ -2,8 +2,9 @@ package hooks
 
 import (
 	"context"
-	"log/slog"
 	"time"
+
+	log "github.com/xraph/go-utils/log"
 
 	"github.com/xraph/dispatch/engine"
 	"github.com/xraph/dispatch/job"
@@ -17,12 +18,12 @@ import (
 type DispatchHook struct {
 	eng    *engine.Engine
 	trove  *trove.Trove
-	logger *slog.Logger
+	logger log.Logger
 }
 
 // NewDispatchHook creates a Dispatch hook, auto-discovering the engine from DI.
 // Returns nil if Dispatch is not available.
-func NewDispatchHook(fapp forge.App, t *trove.Trove, logger *slog.Logger) *DispatchHook {
+func NewDispatchHook(fapp forge.App, t *trove.Trove, logger log.Logger) *DispatchHook {
 	eng, err := vessel.Inject[*engine.Engine](fapp.Container())
 	if err != nil {
 		if logger != nil {
@@ -62,17 +63,17 @@ func (h *DispatchHook) RegisterJobs(ctx context.Context) {
 
 	if h.logger != nil {
 		h.logger.Info("registered trove dispatch jobs",
-			"jobs", []string{"trove.cleanup-expired-uploads", "trove.cas-gc"},
+			log.Any("jobs", []string{"trove.cleanup-expired-uploads", "trove.cas-gc"}),
 		)
 	}
 }
 
 func (h *DispatchHook) cleanupExpiredUploads(ctx context.Context) error {
 	// This would use the store to list and clean up expired uploads.
-	// Placeholder for now — requires store access.
+	// Placeholder for now -- requires store access.
 	if h.logger != nil {
 		h.logger.Info("running expired upload cleanup",
-			"time", time.Now().UTC(),
+			log.Any("time", time.Now().UTC()),
 		)
 	}
 	return nil
@@ -91,10 +92,10 @@ func (h *DispatchHook) casGC(ctx context.Context) error {
 
 	if h.logger != nil {
 		h.logger.Info("CAS garbage collection completed",
-			"scanned", result.Scanned,
-			"deleted", result.Deleted,
-			"freed_bytes", result.FreedBytes,
-			"errors", result.Errors,
+			log.Int("scanned", result.Scanned),
+			log.Int("deleted", result.Deleted),
+			log.Any("freed_bytes", result.FreedBytes),
+			log.Any("errors", result.Errors),
 		)
 	}
 	return nil

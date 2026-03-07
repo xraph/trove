@@ -4,7 +4,8 @@ package hooks
 import (
 	"context"
 	"fmt"
-	"log/slog"
+
+	log "github.com/xraph/go-utils/log"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
@@ -14,12 +15,12 @@ import (
 // ChronicleHook emits audit events for storage operations via Chronicle.
 type ChronicleHook struct {
 	emitter chronicle.Emitter
-	logger  *slog.Logger
+	logger  log.Logger
 }
 
 // NewChronicleHook creates a Chronicle hook, auto-discovering the emitter from DI.
 // Returns nil if Chronicle is not available.
-func NewChronicleHook(fapp forge.App, logger *slog.Logger) *ChronicleHook {
+func NewChronicleHook(fapp forge.App, logger log.Logger) *ChronicleHook {
 	emitter, err := vessel.Inject[chronicle.Emitter](fapp.Container())
 	if err != nil {
 		if logger != nil {
@@ -129,8 +130,8 @@ func (h *ChronicleHook) record(ctx context.Context, action, resource, resourceID
 	}
 	if err := builder.Record(); err != nil && h.logger != nil {
 		h.logger.Warn("failed to record chronicle event",
-			"action", action,
-			"error", err,
+			log.String("action", action),
+			log.Any("error", err),
 		)
 	}
 }

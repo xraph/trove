@@ -3,7 +3,8 @@ package hooks
 import (
 	"context"
 	"fmt"
-	"log/slog"
+
+	log "github.com/xraph/go-utils/log"
 
 	"github.com/xraph/forge"
 	vaultstore "github.com/xraph/vault/store"
@@ -15,12 +16,12 @@ import (
 // VaultHook auto-configures encryption middleware with Vault-managed keys.
 type VaultHook struct {
 	secrets vaultstore.Store
-	logger  *slog.Logger
+	logger  log.Logger
 }
 
 // NewVaultHook creates a Vault hook, auto-discovering Vault from DI.
 // Returns nil if Vault is not available.
-func NewVaultHook(fapp forge.App, logger *slog.Logger) *VaultHook {
+func NewVaultHook(fapp forge.App, logger log.Logger) *VaultHook {
 	s, err := vessel.Inject[vaultstore.Store](fapp.Container())
 	if err != nil {
 		if logger != nil {
