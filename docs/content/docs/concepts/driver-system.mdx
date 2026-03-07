@@ -1,0 +1,164 @@
+---
+title: "Driver System"
+description: "Pluggable storage driver interface, DSN parsing, driver registry, and conformance testing."
+---
+
+Trove's storage layer is built on a pluggable driver interface. Every backend -- local filesystem, in-memory, S3, GCS, Azure Blob, SFTP -- implements the same `driver.Driver` interface. Your application code never imports a cloud SDK directly; it talks to the driver abstraction.
+
+## The Driver Interface
+
+The `driver.Driver` interface defines the minimum surface area every storage backend must implement:
+
+```go
+type Driver interface {
+    // Identity & lifecycle
+    Name() string
+    Open(ctx context.Context, dsn string, opts ...Option) error
+    Close(ctx context.Context) error
+    Ping(ctx context.Context) error
+
+    // Object operations
+    Put(ctx context.Context, bucket, key string, r io.Reader, opts ...PutOption) (*ObjectInfo, error)
+    Get(ctx context.Context, bucket, key string, opts ...GetOption) (*ObjectReader, error)
+    Delete(ctx context.Context, bucket, key string, opts ...DeleteOption) error
+    Head(ctx context.Context, bucket, key string) (*ObjectInfo, error)
+    List(ctx context.Context, bucket string, opts ...ListOption) (*ObjectIterator, error)
+    Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string, opts ...CopyOption) (*ObjectInfo, error)
+
+    // Bucket operations
+    CreateBucket(ctx context.Context, name string, opts ...BucketOption) error
+    DeleteBucket(ctx context.Context, name string) error
+    ListBuckets(ctx context.Context) ([]BucketInfo, error)
+}
+```
+
+Advanced features such as multipart uploads, pre-signed URLs, and versioning are exposed through optional [capability interfaces](/docs/concepts/capabilities) rather than bloating the core contract.
+
+## DSN Format
+
+Drivers are opened with a DSN (Data Source Name) string that encodes the backend type, credentials, host, path, and options:
+
+```
+scheme://[user:password@]host/path[?params]
+```
+
+Each driver defines its own DSN scheme:
+
+| Driver | DSN Example | Description |
+|--------|-------------|-------------|
+| Local filesystem | `file:///var/data/storage` | Host-less path to a root directory |
+| In-memory | `mem://` | No path or host required |
+| Amazon S3 | `s3://my-bucket?region=us-east-1` | Bucket in path, region as query param |
+| Google Cloud Storage | `gs://my-bucket` | Bucket in path |
+| Azure Blob Storage | `azblob://my-container` | Container in path |
+| SFTP | `sftp://user@host:22/uploads` | SSH host with remote path |
+
+Parse a DSN programmatically with `driver.ParseDSN`:
+
+```go
+cfg, err := driver.ParseDSN("s3://my-bucket?region=us-east-1&endpoint=http://localhost:9000")
+// cfg.Scheme   = "s3"
+// cfg.Path     = "/my-bucket"
+// cfg.Params   = url.Values{"region": ["us-east-1"], "endpoint": ["http://localhost:9000"]}
+```
+
+## Driver Registry
+
+Drivers register themselves at init time using `driver.Register`. This enables DSN-based discovery without importing every driver package explicitly.
+
+```go
+// In your driver package (e.g., s3driver/init.go):
+func init() {
+    driver.Register("s3", func() driver.Driver {
+        return &S3Driver{}
+    })
+}
+```
+
+Look up and instantiate a driver by name:
+
+```go
+factory, ok := driver.Lookup("s3")
+if !ok {
+    log.Fatal("s3 driver not registered")
+}
+drv := factory()
+err := drv.Open(ctx, "s3://my-bucket?region=us-east-1")
+```
+
+List all registered drivers:
+
+```go
+names := driver.Drivers() // ["s3", "gcs", "local", "mem", ...]
+```
+
+## Conformance Test Suite
+
+Every driver must pass the conformance suite defined in `trovetest.RunDriverSuite`. The suite exercises all core operations -- bucket CRUD, object put/get/delete/head/list/copy, pagination, metadata, and concurrency.
+
+```go
+package mydriver_test
+
+import (
+    "testing"
+
+    "github.com/xraph/trove/driver"
+    "github.com/xraph/trove/trovetest"
+)
+
+func TestMyDriver(t *testing.T) {
+    trovetest.RunDriverSuite(t, func(t *testing.T) driver.Driver {
+        drv := mydriver.New()
+        err := drv.Open(context.Background(), "myscheme:///tmp/test-data")
+        if err != nil {
+            t.Fatal(err)
+        }
+        t.Cleanup(func() { drv.Close(context.Background()) })
+        return drv
+    })
+}
+```
+
+The suite covers:
+
+- **Bucket lifecycle** -- CreateBucket, DeleteBucket, ListBuckets, duplicate detection
+- **Object CRUD** -- Put, Get, Delete, Head with content types, metadata, and overwrite
+- **Listing** -- Empty listing, prefix filtering, pagination with cursors
+- **Copy** -- Within-bucket and cross-bucket copies, missing source detection
+- **Concurrency** -- 20 parallel puts and 20 parallel reads against the same bucket
+- **Ping** -- Backend connectivity verification
+
+## Building a Custom Driver
+
+To build a custom driver, implement the `driver.Driver` interface, register it, and run the conformance suite:
+
+```go
+package customdriver
+
+import "github.com/xraph/trove/driver"
+
+type Custom struct {
+    // your fields
+}
+
+func New() *Custom { return &Custom{} }
+
+func (c *Custom) Name() string { return "custom" }
+func (c *Custom) Open(ctx context.Context, dsn string, opts ...driver.Option) error {
+    cfg, err := driver.ParseDSN(dsn)
+    if err != nil {
+        return err
+    }
+    // Initialize your backend using cfg...
+    return nil
+}
+
+// Implement remaining methods: Close, Ping, Put, Get, Delete,
+// Head, List, Copy, CreateBucket, DeleteBucket, ListBuckets...
+
+func init() {
+    driver.Register("custom", func() driver.Driver { return New() })
+}
+```
+
+For advanced features, implement the optional [capability interfaces](/docs/concepts/capabilities) such as `MultipartDriver` or `PresignDriver`.

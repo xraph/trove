@@ -1,0 +1,77 @@
+---
+title: "Dashboard UI"
+description: "Built-in web dashboard for managing buckets, objects, uploads, CAS entries, and quotas."
+---
+
+Trove includes a Forge Dashboard contributor that provides a web UI for managing all aspects of object storage. The dashboard gives operators visibility into buckets, objects, multipart uploads, content-addressable storage, and quota usage without writing code or using the REST API.
+
+## Enabling the Dashboard
+
+The dashboard is automatically registered when the Trove extension is used alongside the Forge Dashboard extension. No additional configuration is required:
+
+```go
+import (
+    "github.com/xraph/forge"
+    dashboardext "github.com/xraph/forge/extensions/dashboard"
+    troveext "github.com/xraph/trove/extension"
+)
+
+app := forge.New(
+    forge.WithExtensions(
+        dashboardext.New(),
+        troveext.New(),
+    ),
+)
+```
+
+When both extensions are present, Trove registers its dashboard pages into the Forge dashboard automatically via DI auto-discovery.
+
+## Dashboard Pages
+
+### Overview
+
+The landing page displays storage statistics at a glance: total objects, total bytes stored, active multipart uploads, CAS entries, and current quota usage across all tenants.
+
+### Buckets
+
+List all buckets with object counts and total size. Create new buckets, view bucket details, and delete empty buckets. Each bucket links to its object listing.
+
+### Objects
+
+Browse objects within a bucket. Upload new objects, download existing ones, view metadata (content type, size, checksums, tags), and delete objects. Supports prefix-based filtering for navigating large buckets.
+
+### Uploads
+
+Monitor active multipart uploads with progress indicators. View individual part status, elapsed time, and total size. Abort stale or abandoned uploads to reclaim storage.
+
+### CAS
+
+View the content-addressable storage index with reference counts, content hashes, and total deduplicated bytes. Identify pinned entries that are exempt from garbage collection. Trigger manual GC runs to reclaim unreferenced content blocks.
+
+### Quotas
+
+View per-tenant storage quotas with usage-versus-limit breakdowns. See which tenants are approaching their limits and manage quota assignments.
+
+### Settings
+
+Inspect the active Trove configuration: driver DSN, base path, CAS algorithm, Grove database, and the current middleware pipeline. Useful for verifying runtime configuration in deployed environments.
+
+### File Browser
+
+A hierarchical file browser for each bucket that supports common file operations: upload, download, copy, paste, rename, and delete. Navigate nested key prefixes as if they were directories, making it easy to manage objects with path-like keys.
+
+## Routes
+
+Dashboard routes are registered under the Forge dashboard base path. By default, Trove's dashboard pages are available at:
+
+```
+/dashboard/trove/
+```
+
+The exact prefix depends on the Forge Dashboard extension's own `base_path` configuration. All Trove dashboard routes are nested under the dashboard's route group, inheriting its authentication and middleware.
+
+## HTMX Integration
+
+The dashboard uses [HTMX](https://htmx.org) for interactive updates without full page reloads. Actions like creating a bucket, uploading an object, or aborting an upload are performed via HTMX-driven requests that swap content in place. This keeps the interface responsive while maintaining server-rendered HTML as the source of truth.
+
+Table listings support HTMX-powered pagination and inline search, so operators can navigate large datasets without leaving the page.

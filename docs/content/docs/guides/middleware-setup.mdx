@@ -1,0 +1,383 @@
+---
+title: "Middleware Setup"
+description: "Configure encryption, compression, content scanning, deduplication, and custom middleware."
+---
+
+Trove's middleware pipeline transforms data as it flows between your application and storage backends. Middleware is direction-aware (read, write, or both) and scope-aware (global, per-bucket, per-key-pattern, or custom predicate). This guide covers every built-in middleware with full setup code.
+
+## Encryption
+
+AES-256-GCM authenticated encryption. Data is encrypted on write and decrypted on read transparently.
+
+### Static Key
+
+```go
+import (
+    "crypto/rand"
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/middleware/encrypt"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+// Generate a 32-byte key for AES-256.
+key := make([]byte, 32)
+if _, err := rand.Read(key); err != nil {
+    log.Fatal(err)
+}
+
+drv := memdriver.New()
+t, _ := trove.Open(drv,
+    trove.WithMiddleware(encrypt.New(
+        encrypt.WithKeyProvider(encrypt.NewStaticKeyProvider(key)),
+    )),
+)
+defer t.Close(ctx)
+
+// All objects are now encrypted at rest.
+t.CreateBucket(ctx, "secrets")
+t.Put(ctx, "secrets", "credentials.json", strings.NewReader(`{"token":"abc"}`))
+
+// Get automatically decrypts.
+obj, _ := t.Get(ctx, "secrets", "credentials.json")
+data, _ := io.ReadAll(obj)
+obj.Close()
+// data == `{"token":"abc"}`
+```
+
+### Custom Key Provider
+
+Implement the `KeyProvider` interface for key rotation or Vault-backed keys:
+
+```go
+type KeyProvider interface {
+    Key(ctx context.Context) ([]byte, error)
+}
+
+// Example: fetch key from environment or secret manager.
+type EnvKeyProvider struct{}
+
+func (p *EnvKeyProvider) Key(ctx context.Context) ([]byte, error) {
+    hex := os.Getenv("TROVE_ENCRYPTION_KEY")
+    if hex == "" {
+        return nil, errors.New("encryption key not set")
+    }
+    return decodeHex(hex)
+}
+
+enc := encrypt.New(
+    encrypt.WithKeyProvider(&EnvKeyProvider{}),
+)
+```
+
+The encrypted format is `[4-byte nonce length][nonce][ciphertext + GCM tag]`. Key rotation requires re-encrypting existing objects.
+
+## Compression
+
+Zstd compression with automatic skip logic for already-compressed formats.
+
+```go
+import "github.com/xraph/trove/middleware/compress"
+
+t, _ := trove.Open(drv,
+    trove.WithMiddleware(compress.New(
+        compress.WithMinSize(1024),               // Skip files smaller than 1KB.
+        compress.WithExclude(".jpg", ".png"),      // Add custom skip extensions.
+    )),
+)
+```
+
+The compression middleware automatically skips files with extensions that are already compressed (jpg, png, gif, webp, mp4, mp3, zip, gz, bz2, xz, zst, br, rar, 7z). On read, it detects Zstd magic bytes and passes through uncompressed data transparently. If compression produces output larger than input, the original data is kept.
+
+## Content Scanning
+
+Write-only middleware that scans uploaded content for threats before it reaches storage.
+
+```go
+import "github.com/xraph/trove/middleware/scan"
+
+scanner := scan.New(
+    scan.WithProvider(scan.NewClamAVProvider("tcp://localhost:3310")),
+    scan.WithMaxSize(25 << 20),                  // Skip files larger than 25MB.
+    scan.WithSkipExtensions(".log", ".tmp"),      // Skip known-safe extensions.
+    scan.WithOnDetect(func(ctx context.Context, key string, result *scan.ScanResult) {
+        log.Printf("THREAT in %s: %s (severity: %s)", key, result.Threat, result.Severity)
+    }),
+)
+
+t, _ := trove.Open(drv,
+    trove.WithWriteMiddleware(scanner),
+)
+
+// Uploads are scanned. Malicious content returns trove.ErrContentBlocked.
+_, err := t.Put(ctx, "uploads", "file.exe", suspiciousReader)
+if errors.Is(err, trove.ErrContentBlocked) {
+    fmt.Println("Upload rejected: malware detected")
+}
+```
+
+### Custom Scan Provider
+
+Implement the `ScanProvider` interface for custom backends:
+
+```go
+type ScanProvider interface {
+    Scan(ctx context.Context, r io.Reader) (*ScanResult, error)
+}
+
+type MyScanProvider struct{}
+
+func (p *MyScanProvider) Scan(ctx context.Context, r io.Reader) (*scan.ScanResult, error) {
+    data, _ := io.ReadAll(r)
+    if containsMalware(data) {
+        return &scan.ScanResult{
+            Clean:  false,
+            Threat: "custom-malware-sig",
+        }, nil
+    }
+    return &scan.ScanResult{Clean: true}, nil
+}
+```
+
+## Deduplication
+
+Write-only middleware that detects duplicate content via BLAKE3 hashing and reports it through a callback.
+
+```go
+import "github.com/xraph/trove/middleware/dedup"
+
+dup := dedup.New(
+    dedup.WithOnDuplicate(func(ctx context.Context, key, hash string) {
+        log.Printf("Duplicate detected: %s (hash: %s)", key, hash)
+    }),
+)
+
+t, _ := trove.Open(drv,
+    trove.WithWriteMiddleware(dup),
+)
+```
+
+The dedup middleware only **detects** duplicates -- data still flows through to storage. For actual storage-level deduplication, pair it with the [CAS engine](/docs/storage/cas).
+
+Configure the hash algorithm:
+
+```go
+dup := dedup.New(
+    dedup.WithHashAlgorithm(dedup.AlgSHA256), // default is BLAKE3
+)
+```
+
+## Watermarking
+
+Read-only middleware that embeds invisible watermark metadata in downloaded images using byte-level manipulation (no image decoding dependencies).
+
+```go
+import "github.com/xraph/trove/middleware/watermark"
+
+// Static watermark text.
+wm := watermark.New(
+    watermark.WithText("licensed-to:acme-corp"),
+    watermark.WithTypes("image/png", "image/jpeg"),
+)
+
+t, _ := trove.Open(drv,
+    trove.WithReadMiddleware(wm),
+)
+```
+
+### Dynamic Watermark Text
+
+Use `WithTextFunc` for per-request watermarks based on context:
+
+```go
+wm := watermark.New(
+    watermark.WithTextFunc(func(ctx context.Context) string {
+        userID := ctx.Value("user_id").(string)
+        return fmt.Sprintf("user:%s;time:%d", userID, time.Now().Unix())
+    }),
+    watermark.WithTypes("image/png", "image/jpeg"),
+)
+```
+
+Supported formats: PNG (tEXt chunk injection) and JPEG (COM marker injection). Non-matching content types pass through unmodified.
+
+## Scoped Middleware
+
+Apply different middleware to different buckets or key patterns using scopes.
+
+### Per-Bucket Middleware
+
+```go
+import "github.com/xraph/trove/middleware"
+
+t, _ := trove.Open(drv,
+    // Encrypt everything in the "secrets" bucket.
+    trove.WithScopedMiddleware(
+        middleware.ForBuckets("secrets"),
+        encrypt.New(encrypt.WithKeyProvider(encrypt.NewStaticKeyProvider(key))),
+    ),
+
+    // Compress only logs.
+    trove.WithScopedMiddleware(
+        middleware.ForBuckets("logs"),
+        compress.New(),
+    ),
+
+    // Scan uploads in the "user-content" bucket.
+    trove.WithScopedWriteMiddleware(
+        middleware.ForBuckets("user-content"),
+        scanner,
+    ),
+)
+```
+
+### Per-Key-Pattern Middleware
+
+```go
+// Watermark only image files.
+trove.WithScopedReadMiddleware(
+    middleware.ForKeys("*.jpg", "*.png", "*.webp"),
+    wm,
+)
+
+// Compress CSV and log files.
+trove.WithScopedMiddleware(
+    middleware.ForKeys("*.csv", "*.log", "reports/*.txt"),
+    compress.New(),
+)
+```
+
+### Custom Predicate Scope
+
+```go
+// Apply middleware only for a specific tenant.
+trove.WithScopedMiddleware(
+    middleware.When(func(ctx context.Context, bucket, key string) bool {
+        return extractTenant(ctx) == "acme"
+    }),
+    encrypt.New(encrypt.WithKeyProvider(acmeKeyProvider)),
+)
+```
+
+### Composing Scopes
+
+```go
+// AND: both conditions must match.
+scope := middleware.And(
+    middleware.ForBuckets("media"),
+    middleware.ForKeys("*.jpg", "*.png"),
+)
+
+// OR: either condition matches.
+scope := middleware.Or(
+    middleware.ForBuckets("secrets"),
+    middleware.ForKeys("*.enc"),
+)
+
+// NOT: invert a scope.
+scope := middleware.Not(middleware.ForBuckets("public"))
+```
+
+## Custom Middleware
+
+Build your own middleware by implementing the `Middleware` interface plus `ReadMiddleware` and/or `WriteMiddleware`.
+
+### Logging Middleware Example
+
+```go
+import (
+    "io"
+    "log"
+    "github.com/xraph/trove/driver"
+    "github.com/xraph/trove/middleware"
+)
+
+type LoggingMiddleware struct{}
+
+func (l *LoggingMiddleware) Name() string                    { return "logging" }
+func (l *LoggingMiddleware) Direction() middleware.Direction  { return middleware.DirectionReadWrite }
+
+// WriteMiddleware: log uploads.
+func (l *LoggingMiddleware) WrapWriter(ctx context.Context, w io.WriteCloser, key string) (io.WriteCloser, error) {
+    log.Printf("[WRITE] key=%s", key)
+    return &loggingWriter{inner: w, key: key}, nil
+}
+
+// ReadMiddleware: log downloads.
+func (l *LoggingMiddleware) WrapReader(ctx context.Context, r io.ReadCloser, info *driver.ObjectInfo) (io.ReadCloser, error) {
+    log.Printf("[READ] key=%s size=%d", info.Key, info.Size)
+    return r, nil
+}
+
+type loggingWriter struct {
+    inner   io.WriteCloser
+    key     string
+    written int64
+}
+
+func (w *loggingWriter) Write(p []byte) (int, error) {
+    n, err := w.inner.Write(p)
+    w.written += int64(n)
+    return n, err
+}
+
+func (w *loggingWriter) Close() error {
+    log.Printf("[WRITE COMPLETE] key=%s bytes=%d", w.key, w.written)
+    return w.inner.Close()
+}
+```
+
+Register it:
+
+```go
+t, _ := trove.Open(drv,
+    trove.WithMiddleware(&LoggingMiddleware{}),
+)
+```
+
+## Pipeline Ordering
+
+Middleware runs in priority order (lower number = runs first, default is 100). Control ordering with `WithMiddlewareAt`:
+
+```go
+t, _ := trove.Open(drv,
+    // Priority 10: compression runs first on writes.
+    trove.WithMiddlewareAt(10, compress.New()),
+
+    // Priority 20: then encryption wraps the compressed data.
+    trove.WithMiddlewareAt(20, encrypt.New(
+        encrypt.WithKeyProvider(encrypt.NewStaticKeyProvider(key)),
+    )),
+
+    // Priority 50: scan the original content before compression.
+    trove.WithMiddlewareAt(50, scanner),
+)
+```
+
+On the write path, data flows through middleware in priority order:
+
+```
+data → compress (10) → encrypt (20) → scan (50) → driver.Put
+```
+
+On the read path, the order reverses:
+
+```
+driver.Get → encrypt (20) → compress (10) → data
+```
+
+## Runtime Registration
+
+Add or remove middleware after initialization:
+
+```go
+// Add middleware at runtime.
+t.UseMiddleware(middleware.Registration{
+    Middleware: compress.New(),
+    Scope:     middleware.ForBuckets("new-bucket"),
+    Direction: middleware.DirectionReadWrite,
+    Priority:  100,
+})
+
+// Remove middleware by name and scope.
+t.RemoveMiddleware("compress", middleware.ForBuckets("new-bucket"))
+```

@@ -1,0 +1,156 @@
+---
+title: "Multi-Backend Routing"
+description: "Route objects to different storage backends using patterns, functions, or direct backend access."
+---
+
+Trove supports multiple storage backends simultaneously. You can register named backends alongside the primary driver and route objects to them using pattern matching, custom functions, or direct access. This enables hot/cold tiering, per-tenant isolation, content-type segregation, and more.
+
+## Named Backends
+
+Register additional backends at construction time with `WithBackend`. Each backend is a fully initialized `driver.Driver` identified by a unique name.
+
+```go
+import (
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/localdriver"
+    "github.com/xraph/trove/drivers/s3driver"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+hot := memdriver.New()
+hot.Open(ctx, "mem://")
+
+cold := s3driver.New()
+cold.Open(ctx, "s3://archive-bucket?region=us-east-1")
+
+primary := localdriver.New()
+primary.Open(ctx, "file:///var/data/storage")
+
+t, err := trove.Open(primary,
+    trove.WithBackend("hot", hot),
+    trove.WithBackend("cold", cold),
+)
+```
+
+## Pattern Routing
+
+Use `WithRoute` to direct objects matching a glob pattern to a named backend. Patterns follow `filepath.Match` syntax.
+
+```go
+t, err := trove.Open(primary,
+    trove.WithBackend("archive", cold),
+    trove.WithBackend("cache", hot),
+
+    // All .log files go to the archive backend
+    trove.WithRoute("*.log", "archive"),
+
+    // All keys under tmp/ go to the cache backend
+    trove.WithRoute("tmp/*", "cache"),
+)
+```
+
+When `t.Put(ctx, "logs", "app.log", data)` is called, the router matches `app.log` against `*.log` and sends the operation to the `archive` backend.
+
+## Function Routing
+
+For more complex logic, use `WithRouteFunc` to provide a custom routing function. The function receives the bucket and key and returns a backend name. Return an empty string to fall through to the next rule or the default backend.
+
+```go
+t, err := trove.Open(primary,
+    trove.WithBackend("fast", hot),
+    trove.WithBackend("durable", cold),
+
+    trove.WithRouteFunc(func(bucket, key string) string {
+        // Route by bucket name
+        if bucket == "thumbnails" {
+            return "fast"
+        }
+        // Route large media to durable storage
+        if strings.HasPrefix(key, "media/") {
+            return "durable"
+        }
+        return "" // fall through to default
+    }),
+)
+```
+
+## Resolution Order
+
+When an operation is performed, the router resolves the target backend in this order:
+
+1. **Custom route functions** -- first non-empty return wins
+2. **Pattern routes** -- first matching pattern wins
+3. **Default driver** -- the primary driver passed to `Open`
+
+This means route functions take precedence over pattern routes, and patterns take precedence over the default driver.
+
+## Direct Backend Access
+
+Bypass routing entirely by accessing a named backend directly with `Backend()`. This returns a new `*Trove` handle pinned to that backend -- all operations go directly to it.
+
+```go
+// Get a handle to the cold storage backend
+coldStore, err := t.Backend("cold")
+if err != nil {
+    // returns trove.ErrBackendNotFound if the name is unknown
+    log.Fatal(err)
+}
+
+// All operations on coldStore go directly to the S3 archive
+coldStore.Put(ctx, "backups", "db-2024-01.sql.gz", dump)
+coldStore.List(ctx, "backups", driver.WithPrefix("db-2024"))
+```
+
+The returned handle shares the parent's middleware pipeline and streaming pool, so encryption, compression, and other middleware still apply.
+
+## Common Patterns
+
+### Hot/Cold Tiering
+
+Keep frequently accessed objects in fast storage and archive older data to cheaper storage:
+
+```go
+t, _ := trove.Open(ssdDriver,
+    trove.WithBackend("glacier", s3GlacierDriver),
+    trove.WithRoute("archive/*", "glacier"),
+)
+```
+
+### Per-Tenant Routing
+
+Route each tenant's data to a separate backend for isolation:
+
+```go
+t, _ := trove.Open(defaultDriver,
+    trove.WithBackend("tenant-acme", acmeDriver),
+    trove.WithBackend("tenant-globex", globexDriver),
+
+    trove.WithRouteFunc(func(bucket, key string) string {
+        // Bucket names encode the tenant: "acme-uploads", "globex-docs"
+        parts := strings.SplitN(bucket, "-", 2)
+        if len(parts) == 2 {
+            return "tenant-" + parts[0]
+        }
+        return ""
+    }),
+)
+```
+
+### Content-Type Segregation
+
+Route media files to object storage and documents to local disk:
+
+```go
+t, _ := trove.Open(localDriver,
+    trove.WithBackend("media-cdn", s3Driver),
+    trove.WithRouteFunc(func(bucket, key string) string {
+        ext := strings.ToLower(filepath.Ext(key))
+        switch ext {
+        case ".jpg", ".png", ".gif", ".webp", ".mp4":
+            return "media-cdn"
+        default:
+            return ""
+        }
+    }),
+)
+```

@@ -1,0 +1,215 @@
+---
+title: "Capabilities"
+description: "Optional driver capabilities via interface extension: multipart, presign, versioning, notifications, lifecycle, range reads."
+---
+
+The core `driver.Driver` interface is intentionally minimal. Advanced features are exposed through optional capability interfaces that a driver may or may not implement. This keeps the contract simple while allowing each backend to expose its native strengths.
+
+## Capability Check Pattern
+
+Use a Go type assertion to check if a driver supports a capability at runtime:
+
+```go
+drv := t.Driver()
+
+if mp, ok := drv.(driver.MultipartDriver); ok {
+    // Driver supports multipart uploads
+    uploadID, err := mp.InitiateMultipart(ctx, "bucket", "large-file.bin")
+    // ...
+}
+```
+
+This pattern is safe -- if the driver does not implement the interface, the assertion returns `false` and no capability methods are called.
+
+## MultipartDriver
+
+Enables chunked uploads where each part can be uploaded independently and assembled on the server.
+
+```go
+type MultipartDriver interface {
+    Driver
+    InitiateMultipart(ctx context.Context, bucket, key string, opts ...PutOption) (uploadID string, err error)
+    UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, r io.Reader) (*PartInfo, error)
+    CompleteMultipart(ctx context.Context, bucket, key, uploadID string, parts []PartInfo) (*ObjectInfo, error)
+    AbortMultipart(ctx context.Context, bucket, key, uploadID string) error
+}
+```
+
+Each part returns a `PartInfo` with the part number, ETag, and size. Pass all part infos to `CompleteMultipart` to finalize the upload.
+
+```go
+uploadID, _ := mp.InitiateMultipart(ctx, "data", "backup.tar.gz")
+
+var parts []driver.PartInfo
+for i, chunk := range chunks {
+    part, _ := mp.UploadPart(ctx, "data", "backup.tar.gz", uploadID, i+1, chunk)
+    parts = append(parts, *part)
+}
+
+info, _ := mp.CompleteMultipart(ctx, "data", "backup.tar.gz", uploadID, parts)
+```
+
+## PresignDriver
+
+Generates time-limited URLs for direct client access without proxying through your server.
+
+```go
+type PresignDriver interface {
+    Driver
+    PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+    PresignPut(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+}
+```
+
+```go
+if ps, ok := drv.(driver.PresignDriver); ok {
+    downloadURL, _ := ps.PresignGet(ctx, "media", "video.mp4", 15*time.Minute)
+    uploadURL, _ := ps.PresignPut(ctx, "uploads", "user-avatar.jpg", 5*time.Minute)
+}
+```
+
+## VersioningDriver
+
+Manages object version history for audit trails and point-in-time recovery.
+
+```go
+type VersioningDriver interface {
+    Driver
+    ListVersions(ctx context.Context, bucket, key string) ([]VersionInfo, error)
+    GetVersion(ctx context.Context, bucket, key, versionID string) (*ObjectReader, error)
+    DeleteVersion(ctx context.Context, bucket, key, versionID string) error
+    RestoreVersion(ctx context.Context, bucket, key, versionID string) (*ObjectInfo, error)
+}
+```
+
+`VersionInfo` includes the version ID, key, size, timestamp, and whether it is the latest version.
+
+```go
+if vd, ok := drv.(driver.VersioningDriver); ok {
+    versions, _ := vd.ListVersions(ctx, "docs", "contract.pdf")
+    for _, v := range versions {
+        fmt.Printf("Version %s, %d bytes, latest=%v\n", v.VersionID, v.Size, v.IsLatest)
+    }
+
+    // Restore a previous version
+    vd.RestoreVersion(ctx, "docs", "contract.pdf", versions[1].VersionID)
+}
+```
+
+## NotificationDriver
+
+Provides real-time change notifications via a Go channel.
+
+```go
+type NotificationDriver interface {
+    Driver
+    Watch(ctx context.Context, bucket string, opts ...WatchOption) (<-chan ObjectEvent, error)
+}
+```
+
+Event types:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `EventCreated` | `object.created` | A new object was stored |
+| `EventDeleted` | `object.deleted` | An object was removed |
+| `EventUpdated` | `object.updated` | An existing object was overwritten |
+
+```go
+if nd, ok := drv.(driver.NotificationDriver); ok {
+    events, _ := nd.Watch(ctx, "uploads")
+
+    go func() {
+        for event := range events {
+            fmt.Printf("[%s] %s/%s\n", event.Type, event.Bucket, event.Key)
+        }
+    }()
+}
+```
+
+## LifecycleDriver
+
+Configures automatic object expiration and storage class transitions.
+
+```go
+type LifecycleDriver interface {
+    Driver
+    SetLifecycle(ctx context.Context, bucket string, rules []LifecycleRule) error
+    GetLifecycle(ctx context.Context, bucket string) ([]LifecycleRule, error)
+}
+```
+
+```go
+if lc, ok := drv.(driver.LifecycleDriver); ok {
+    lc.SetLifecycle(ctx, "logs", []driver.LifecycleRule{
+        {
+            ID:             "expire-old-logs",
+            Prefix:         "debug/",
+            ExpirationDays: 30,
+            Enabled:        true,
+        },
+        {
+            ID:                "archive-access-logs",
+            Prefix:            "access/",
+            TransitionDays:    90,
+            TransitionStorage: "GLACIER",
+            Enabled:           true,
+        },
+    })
+}
+```
+
+## RangeDriver
+
+Supports byte-range reads for resumable downloads and partial content retrieval.
+
+```go
+type RangeDriver interface {
+    Driver
+    GetRange(ctx context.Context, bucket, key string, offset, length int64) (*ObjectReader, error)
+}
+```
+
+A `length` of `-1` reads from the offset to the end of the object.
+
+```go
+if rd, ok := drv.(driver.RangeDriver); ok {
+    // Read bytes 1000-1999
+    reader, _ := rd.GetRange(ctx, "media", "movie.mp4", 1000, 1000)
+    defer reader.Close()
+}
+```
+
+## ServerCopyDriver
+
+Performs server-side copy to avoid downloading and re-uploading data.
+
+```go
+type ServerCopyDriver interface {
+    Driver
+    ServerCopy(ctx context.Context, src, dst ObjectRef) (*ObjectInfo, error)
+}
+```
+
+`ObjectRef` identifies an object by bucket and key:
+
+```go
+if sc, ok := drv.(driver.ServerCopyDriver); ok {
+    sc.ServerCopy(ctx,
+        driver.ObjectRef{Bucket: "source", Key: "data.csv"},
+        driver.ObjectRef{Bucket: "backup", Key: "data.csv"},
+    )
+}
+```
+
+## Driver Capability Matrix
+
+| Capability | Local | Memory | S3 | GCS | Azure | SFTP |
+|------------|:-----:|:------:|:--:|:---:|:-----:|:----:|
+| MultipartDriver | -- | -- | Yes | Yes | Yes | -- |
+| PresignDriver | -- | -- | Yes | Yes | Yes | -- |
+| VersioningDriver | -- | -- | Yes | -- | -- | -- |
+| NotificationDriver | -- | -- | Yes | Yes | -- | -- |
+| LifecycleDriver | -- | -- | Yes | Yes | -- | -- |
+| RangeDriver | -- | -- | Yes | Yes | Yes | -- |
+| ServerCopyDriver | -- | -- | Yes | Yes | Yes | -- |

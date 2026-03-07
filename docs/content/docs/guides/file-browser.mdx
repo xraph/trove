@@ -1,0 +1,306 @@
+---
+title: "File Browser"
+description: "Use Trove's VFS layer to browse, navigate, and serve files with a familiar filesystem API."
+---
+
+Trove's VFS (Virtual Filesystem) package provides a hierarchical file-system interface over flat object storage keys. It supports creating, reading, writing, deleting, and walking files and directories with an API modeled after Go's `os` and `io/fs` packages.
+
+## Creating a VFS Instance
+
+There are two ways to create a VFS:
+
+```go
+import (
+    "context"
+    "fmt"
+    "io"
+    "log"
+
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/vfs"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+ctx := context.Background()
+
+drv := memdriver.New()
+t, _ := trove.Open(drv, trove.WithVFS("uploads"))
+defer t.Close(ctx)
+
+t.CreateBucket(ctx, "uploads")
+t.CreateBucket(ctx, "media")
+
+// Option 1: Use t.VFS() for the default VFS bucket (set via WithVFS).
+fs := t.VFS()
+
+// Option 2: Specify a bucket explicitly.
+mediaFS := t.VFS("media")
+```
+
+## Stat: Check File or Directory Info
+
+`Stat` returns a `*vfs.FileInfo` with name, size, modification time, and directory status.
+
+```go
+// Create a file first.
+f, _ := fs.Create(ctx, "docs/readme.md")
+f.Write([]byte("# My Project"))
+f.Close()
+
+// Stat the file.
+info, err := fs.Stat(ctx, "docs/readme.md")
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Println(info.Name())    // "readme.md"
+fmt.Println(info.Size())    // 13
+fmt.Println(info.IsDir())   // false
+fmt.Println(info.ModTime()) // time.Time of last modification
+```
+
+`FileInfo` implements Go's standard `fs.FileInfo` interface, so it works with any code expecting that type.
+
+## ReadDir: List Directory Contents
+
+`ReadDir` returns a `[]vfs.DirEntry` slice for the given directory path.
+
+```go
+// Create some files.
+for _, name := range []string{"docs/a.txt", "docs/b.txt", "docs/sub/c.txt"} {
+    f, _ := fs.Create(ctx, name)
+    f.Write([]byte("content"))
+    f.Close()
+}
+
+// List the "docs" directory.
+entries, err := fs.ReadDir(ctx, "docs")
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, entry := range entries {
+    fmt.Printf("%-20s dir=%v\n", entry.Name(), entry.IsDir())
+}
+// Output:
+//   a.txt                dir=false
+//   b.txt                dir=false
+//   sub                  dir=true
+```
+
+Each `DirEntry` implements Go's `fs.DirEntry` interface with `Name()`, `IsDir()`, `Type()`, and `Info()` methods.
+
+## Walk: Recursive Traversal
+
+`Walk` traverses the file tree rooted at the given path, calling your function for each file and directory.
+
+```go
+err := fs.Walk(ctx, "", func(path string, info *vfs.FileInfo, err error) error {
+    if err != nil {
+        return err // propagate errors
+    }
+
+    prefix := ""
+    if info.IsDir() {
+        prefix = "[DIR]  "
+    } else {
+        prefix = "[FILE] "
+    }
+    fmt.Printf("%s%s (%d bytes)\n", prefix, path, info.Size())
+    return nil
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### Skipping Directories and Stopping Early
+
+```go
+fs.Walk(ctx, "", func(path string, info *vfs.FileInfo, err error) error {
+    if err != nil {
+        return err
+    }
+
+    // Skip the "temp" directory entirely.
+    if info.IsDir() && info.Name() == "temp" {
+        return vfs.SkipDir
+    }
+
+    // Stop walking after finding a specific file.
+    if info.Name() == "target.txt" {
+        fmt.Println("Found:", path)
+        return vfs.SkipAll
+    }
+
+    return nil
+})
+```
+
+## Open: Read File Content
+
+`Open` returns a file handle for reading. Always close the handle when done.
+
+```go
+f, err := fs.Open(ctx, "docs/readme.md")
+if err != nil {
+    log.Fatal(err)
+}
+defer f.Close()
+
+data, err := io.ReadAll(f)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Content: %s\n", data)
+```
+
+## Create: Write a New File
+
+`Create` returns a writable file handle. Content is flushed to storage on `Close()`.
+
+```go
+f, err := fs.Create(ctx, "reports/q4-2024.csv")
+if err != nil {
+    log.Fatal(err)
+}
+
+f.Write([]byte("name,revenue\n"))
+f.Write([]byte("product-a,1500\n"))
+f.Write([]byte("product-b,2300\n"))
+
+// Close flushes to the underlying storage driver.
+if err := f.Close(); err != nil {
+    log.Fatal(err)
+}
+```
+
+## Mkdir: Create Directories
+
+`Mkdir` creates a directory marker (a zero-length object with a trailing "/").
+
+```go
+if err := fs.Mkdir(ctx, "images"); err != nil {
+    log.Fatal(err)
+}
+
+if err := fs.Mkdir(ctx, "images/thumbnails"); err != nil {
+    log.Fatal(err)
+}
+```
+
+## Remove and RemoveAll
+
+```go
+// Remove a single file.
+if err := fs.Remove(ctx, "reports/old.csv"); err != nil {
+    log.Fatal(err)
+}
+
+// Remove a directory and all its contents recursively.
+if err := fs.RemoveAll(ctx, "temp"); err != nil {
+    log.Fatal(err)
+}
+```
+
+## Rename: Move Files
+
+`Rename` performs a copy-then-delete operation to move or rename a file.
+
+```go
+if err := fs.Rename(ctx, "docs/readme.md", "docs/README.md"); err != nil {
+    log.Fatal(err)
+}
+
+// Move to a different directory.
+if err := fs.Rename(ctx, "docs/old-spec.txt", "archive/old-spec.txt"); err != nil {
+    log.Fatal(err)
+}
+```
+
+## SetMetadata and GetMetadata
+
+Attach and retrieve custom key-value metadata on files.
+
+```go
+// Set metadata.
+err := fs.SetMetadata(ctx, "reports/q4-2024.csv", map[string]string{
+    "author":     "alice",
+    "department": "finance",
+    "reviewed":   "true",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+// Get metadata.
+meta, err := fs.GetMetadata(ctx, "reports/q4-2024.csv")
+if err != nil {
+    log.Fatal(err)
+}
+
+for k, v := range meta {
+    fmt.Printf("  %s = %s\n", k, v)
+}
+```
+
+## Serving Files over HTTP
+
+Use the `IOFS` adapter to serve VFS files over HTTP with Go's standard library.
+
+```go
+import (
+    "net/http"
+    "github.com/xraph/trove/vfs"
+)
+
+// Wrap the VFS in an io/fs.FS adapter.
+iofs := vfs.NewIOFS(t.VFS(), ctx)
+
+// Serve files at /files/*.
+http.Handle("/files/", http.StripPrefix("/files/", http.FileServer(http.FS(iofs))))
+
+// Or parse templates from storage.
+tmpl, err := template.ParseFS(iofs, "templates/*.html")
+if err != nil {
+    log.Fatal(err)
+}
+
+log.Println("Serving on :8080")
+log.Fatal(http.ListenAndServe(":8080", nil))
+```
+
+The `IOFS` adapter implements `fs.FS` and returns `fs.ReadDirFile` for directories, making it compatible with `http.FileServer`, `template.ParseFS`, `embed`-style patterns, and any code that accepts `fs.FS`.
+
+## How VFS Maps to Object Keys
+
+VFS translates between hierarchical paths and flat object keys:
+
+| VFS Operation | Object Key |
+|---------------|------------|
+| `Open("docs/readme.md")` | `docs/readme.md` |
+| `Mkdir("images")` | `images/` (zero-length marker) |
+| `ReadDir("docs")` | `List(prefix="docs/", delimiter="/")` |
+| `Walk("")` | Recursive `List` + `ReadDir` |
+
+Directories are detected by:
+1. Keys ending with `/` (explicit markers from `Mkdir`)
+2. Keys containing `/` in the relative path (implicit directories)
+
+## Multiple VFS Views
+
+Create separate VFS views for different buckets to organize content:
+
+```go
+// Default VFS bucket (set via WithVFS option).
+defaultFS := t.VFS()
+
+// Dedicated views for different content types.
+mediaFS   := t.VFS("media")
+logsFS    := t.VFS("logs")
+archiveFS := t.VFS("archive")
+
+// Each view operates independently on its bucket.
+mediaFS.Create(ctx, "photos/sunset.jpg")
+logsFS.Create(ctx, "2024/01/app.log")
+```

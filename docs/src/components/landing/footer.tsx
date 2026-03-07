@@ -23,7 +23,7 @@ const footerLinks = {
     { label: "Streaming Engine", href: "/docs/storage/streaming-engine" },
     { label: "Content-Addressable Storage", href: "/docs/storage/cas" },
     { label: "Virtual Filesystem", href: "/docs/storage/vfs" },
-    { label: "Multi-Backend Routing", href: "/docs/storage/transport" },
+    { label: "Multi-Backend Routing", href: "/docs/concepts/multi-backend-routing" },
   ],
   Community: [
     {

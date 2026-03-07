@@ -1,0 +1,298 @@
+---
+title: "Basic Storage Operations"
+description: "Complete walkthrough of storing, retrieving, listing, and managing objects with Trove."
+---
+
+This guide covers every core operation in Trove: uploading, downloading, inspecting, listing, copying, and deleting objects. All examples use the local filesystem driver and are runnable as-is.
+
+## Setup
+
+Install Trove and the local driver:
+
+```bash
+go get github.com/xraph/trove
+go get github.com/xraph/trove/drivers/localdriver
+```
+
+Create a Trove instance:
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+    "fmt"
+    "io"
+    "log"
+    "strings"
+
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/driver"
+    "github.com/xraph/trove/drivers/localdriver"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Create and open the local filesystem driver.
+    drv := localdriver.New()
+    if err := drv.Open(ctx, "file:///tmp/trove-guide"); err != nil {
+        log.Fatal(err)
+    }
+
+    // Open a Trove instance with the driver.
+    t, err := trove.Open(drv)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer t.Close(ctx)
+
+    // Create a bucket before storing objects.
+    if err := t.CreateBucket(ctx, "uploads"); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+## Put: Upload an Object
+
+`Put` stores an object from an `io.Reader`. Use functional options to set content type, metadata, and tags.
+
+```go
+content := strings.NewReader("Hello, Trove!")
+
+info, err := t.Put(ctx, "uploads", "greeting.txt", content,
+    driver.WithContentType("text/plain"),
+    driver.WithMetadata(map[string]string{
+        "author":  "alice",
+        "project": "demo",
+    }),
+    driver.WithTags(map[string]string{
+        "env":    "staging",
+        "retain": "30d",
+    }),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Stored: %s (%d bytes)\n", info.Key, info.Size)
+```
+
+## Get: Download an Object
+
+`Get` returns an `*driver.ObjectReader` that wraps an `io.ReadCloser` with metadata. Always close the reader when done.
+
+```go
+obj, err := t.Get(ctx, "uploads", "greeting.txt")
+if err != nil {
+    log.Fatal(err)
+}
+defer obj.Close()
+
+data, err := io.ReadAll(obj)
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Content: %s\n", data)
+fmt.Printf("Type:    %s\n", obj.Info.ContentType)
+fmt.Printf("Size:    %d bytes\n", obj.Info.Size)
+```
+
+## Head: Inspect Metadata
+
+`Head` returns `*driver.ObjectInfo` without downloading the body. Use it to check existence, size, or content type.
+
+```go
+info, err := t.Head(ctx, "uploads", "greeting.txt")
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Key:          %s\n", info.Key)
+fmt.Printf("Size:         %d\n", info.Size)
+fmt.Printf("ContentType:  %s\n", info.ContentType)
+fmt.Printf("LastModified: %s\n", info.LastModified)
+fmt.Printf("ETag:         %s\n", info.ETag)
+
+// Access custom metadata.
+for k, v := range info.Metadata {
+    fmt.Printf("  %s = %s\n", k, v)
+}
+```
+
+## List: Iterate Objects
+
+`List` returns an `*driver.ObjectIterator`. You can iterate one-at-a-time with `Next()` or collect everything with `All()`.
+
+### Using Next() for Streaming Iteration
+
+```go
+iter, err := t.List(ctx, "uploads", driver.WithPrefix("greet"))
+if err != nil {
+    log.Fatal(err)
+}
+
+for {
+    obj, err := iter.Next(ctx)
+    if err == io.EOF {
+        break // No more objects.
+    }
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("  %s (%d bytes)\n", obj.Key, obj.Size)
+}
+```
+
+### Using All() to Collect Results
+
+```go
+iter, err := t.List(ctx, "uploads", driver.WithPrefix("greet"))
+if err != nil {
+    log.Fatal(err)
+}
+
+objects, err := iter.All(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, obj := range objects {
+    fmt.Printf("  %s (%d bytes, type=%s)\n", obj.Key, obj.Size, obj.ContentType)
+}
+```
+
+### Pagination with MaxKeys and Cursor
+
+```go
+var cursor string
+for {
+    opts := []driver.ListOption{driver.WithMaxKeys(100)}
+    if cursor != "" {
+        opts = append(opts, driver.WithCursor(cursor))
+    }
+
+    iter, err := t.List(ctx, "uploads", opts...)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    objects, err := iter.All(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    if len(objects) == 0 {
+        break
+    }
+
+    for _, obj := range objects {
+        fmt.Println(obj.Key)
+    }
+
+    cursor = iter.NextCursor()
+    if cursor == "" {
+        break
+    }
+}
+```
+
+## Copy: Duplicate Objects
+
+`Copy` copies an object within the same bucket or across buckets. The source is not modified.
+
+```go
+// Copy within the same bucket.
+copyInfo, err := t.Copy(ctx, "uploads", "greeting.txt", "uploads", "greeting-backup.txt")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Copied to: %s (%d bytes)\n", copyInfo.Key, copyInfo.Size)
+
+// Copy across buckets.
+t.CreateBucket(ctx, "archive")
+_, err = t.Copy(ctx, "uploads", "greeting.txt", "archive", "greeting.txt")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+## Delete: Remove Objects
+
+```go
+err := t.Delete(ctx, "uploads", "greeting-backup.txt")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+## Error Handling
+
+Trove defines sentinel errors for common failure cases. Use `errors.Is()` to check:
+
+```go
+_, err := t.Get(ctx, "uploads", "nonexistent.txt")
+if errors.Is(err, trove.ErrObjectNotFound) {
+    fmt.Println("Object does not exist")
+}
+
+_, err = t.Head(ctx, "missing-bucket", "file.txt")
+if errors.Is(err, trove.ErrBucketNotFound) {
+    fmt.Println("Bucket does not exist")
+}
+
+// Empty key or bucket errors.
+_, err = t.Put(ctx, "", "key", strings.NewReader("data"))
+if errors.Is(err, trove.ErrBucketEmpty) {
+    fmt.Println("Bucket name is required")
+}
+
+_, err = t.Put(ctx, "uploads", "", strings.NewReader("data"))
+if errors.Is(err, trove.ErrKeyEmpty) {
+    fmt.Println("Key is required")
+}
+```
+
+The full set of sentinel errors:
+
+| Error | When |
+|-------|------|
+| `trove.ErrObjectNotFound` | Get, Head, or Delete on a missing key |
+| `trove.ErrBucketNotFound` | Operation on a bucket that does not exist |
+| `trove.ErrBucketExists` | CreateBucket for a bucket that already exists |
+| `trove.ErrBucketEmpty` | Bucket name is an empty string |
+| `trove.ErrKeyEmpty` | Object key is an empty string |
+| `trove.ErrDriverClosed` | Operation after Close() |
+| `trove.ErrChecksumMismatch` | Integrity check failed |
+
+## Working with ObjectInfo
+
+Every `Put`, `Head`, and `Copy` returns an `*driver.ObjectInfo` struct:
+
+```go
+info, _ := t.Put(ctx, "uploads", "report.csv", csvReader,
+    driver.WithContentType("text/csv"),
+    driver.WithMetadata(map[string]string{"generated": "true"}),
+)
+
+fmt.Println(info.Key)          // "report.csv"
+fmt.Println(info.Size)         // size in bytes
+fmt.Println(info.ContentType)  // "text/csv"
+fmt.Println(info.ETag)         // content hash
+fmt.Println(info.LastModified) // time.Time
+fmt.Println(info.Metadata)    // map[string]string{"generated": "true"}
+fmt.Println(info.VersionID)    // version ID (if driver supports versioning)
+fmt.Println(info.StorageClass) // storage class (e.g., "STANDARD", "GLACIER")
+```
+
+## Cleanup
+
+Always close the Trove instance when you are done. This shuts down the streaming pool and releases driver resources.
+
+```go
+if err := t.Close(ctx); err != nil {
+    log.Printf("close error: %v", err)
+}
+```

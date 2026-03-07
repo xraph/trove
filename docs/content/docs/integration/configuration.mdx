@@ -1,125 +1,112 @@
 ---
-title: Configuration
-description: Configure Grove via YAML files, environment variables, or programmatic options.
+title: "Configuration"
+description: "Configure Trove via YAML files, programmatic options, or environment variables."
 ---
 
-The Grove Forge extension supports multiple configuration sources with automatic merging. YAML configuration takes precedence, with programmatic options filling in gaps.
+Trove supports three configuration sources that merge in a defined order: YAML files, programmatic options, and built-in defaults. This gives you full flexibility to configure storage in any environment.
 
 ## YAML Configuration
 
-Add a `grove` key under `extensions` in your Forge config file:
+Add a `trove` key under `extensions` in your Forge config file:
 
 ```yaml
 # config.yaml
 extensions:
-  grove:
-    driver: postgres
-    dsn: "postgres://user:pass@localhost:5432/mydb"
-    disable_migrate: false
-    disable_routes: false
-    base_path: "/sync"
+  trove:
+    driver_dsn: "file:///data/storage"       # Storage driver DSN
+    grove_database: "default"                # Named Grove DB from DI for metadata
+    base_path: "/trove/v1"                   # HTTP route prefix
+    disable_routes: false                    # Skip HTTP route registration
+    disable_migrate: false                   # Skip auto-migration
+    default_bucket: "default"                # Default bucket name
+    cas_algorithm: "sha256"                  # CAS hash: sha256, blake3, xxhash
 ```
 
-The extension also supports a top-level `grove` key for backward compatibility:
+The extension also supports a top-level `trove` key for backward compatibility:
 
 ```yaml
-# Legacy format
-grove:
-  driver: postgres
-  dsn: "postgres://user:pass@localhost:5432/mydb"
+# Legacy format (still supported)
+trove:
+  driver_dsn: "s3://my-bucket?region=us-east-1"
 ```
 
-The namespaced `extensions.grove` key is checked first, then the top-level `grove` key.
-
-## Config Fields
-
-| Field | YAML Key | Type | Default | Description |
-|-------|----------|------|---------|-------------|
-| Driver | `driver` | `string` | `""` | Database driver name |
-| DSN | `dsn` | `string` | `""` | Connection string |
-| DisableRoutes | `disable_routes` | `bool` | `false` | Skip CRDT sync route registration |
-| DisableMigrate | `disable_migrate` | `bool` | `false` | Skip automatic migrations |
-| BasePath | `base_path` | `string` | `"/sync"` | URL prefix for CRDT sync routes |
-
-## Supported Driver Names
-
-| Name | Driver Module | Database |
-|------|--------------|----------|
-| `postgres` | `github.com/xraph/grove/drivers/pgdriver` | PostgreSQL, CockroachDB, Neon, Supabase |
-| `sqlite` | `github.com/xraph/grove/drivers/sqlitedriver` | SQLite |
-| `mysql` | `github.com/xraph/grove/drivers/mysqldriver` | MySQL, MariaDB |
-| `mongodb` | `github.com/xraph/grove/drivers/mongodriver` | MongoDB |
-| `turso` | `github.com/xraph/grove/drivers/tursodriver` | Turso (LibSQL) |
-| `clickhouse` | `github.com/xraph/grove/drivers/clickhousedriver` | ClickHouse |
+The namespaced `extensions.trove` key is checked first. If not found, the extension falls back to the top-level `trove` key.
 
 ## Programmatic Options
 
-Options set via `ExtOption` functions are merged with YAML configuration:
+Options set via `troveext` functions are merged with YAML configuration:
 
 ```go
-groveext.New(
-    groveext.WithDSN("postgres", dsn),     // Driver + DSN
-    groveext.WithDriver(pgdb),              // Pre-configured driver (takes precedence)
-    groveext.WithDisableMigrate(),          // Disable auto-migration
-    groveext.WithDisableRoutes(),           // Disable CRDT route registration
-    groveext.WithBasePath("/api/sync"),     // Custom sync route prefix
-    groveext.WithRequireConfig(true),       // Require YAML config
+troveext.New(
+    troveext.WithBasePath("/storage/v1"),
+    troveext.WithConfig(troveext.Config{
+        DriverDSN:     "file:///data/storage",
+        DefaultBucket: "uploads",
+        CASAlgorithm:  "blake3",
+    }),
+    troveext.WithDisableRoutes(),
+    troveext.WithDisableMigrate(),
+    troveext.WithGroveDatabase("analytics-db"),
 )
 ```
 
-## Merge Behavior
+### Available Option Functions
 
-When both YAML and programmatic options are provided:
+| Function | Description |
+|----------|-------------|
+| `troveext.WithBasePath(path)` | Set the HTTP route prefix |
+| `troveext.WithConfig(cfg)` | Provide a full `troveext.Config` struct |
+| `troveext.WithDisableRoutes()` | Skip HTTP route registration |
+| `troveext.WithDisableMigrate()` | Skip automatic database migration |
+| `troveext.WithGroveDatabase(name)` | Use a named Grove DB from DI for metadata |
 
-1. **Driver/DSN**: YAML takes precedence. If YAML has no driver, programmatic values are used.
-2. **Boolean flags**: Programmatic `true` values are additive — if either source sets a flag to `true`, it stays `true`.
-3. **BasePath**: YAML takes precedence. Programmatic fills in if YAML is empty.
-4. **WithDriver()**: A pre-configured driver instance always takes precedence over YAML `driver`+`dsn`.
+## Config Merge Behavior
 
-### Example: YAML + Programmatic
+Configuration sources merge in this order:
+
+1. **YAML config** -- `extensions.trove` key, then `trove` key
+2. **Programmatic options** -- Values set via option functions
+3. **Defaults** -- Built-in fallback values
+
+YAML values take precedence over programmatic values for the same field. Programmatic values fill in anything YAML does not set. Boolean flags like `disable_routes` are additive: if either source sets it to `true`, it stays `true`.
+
+## Driver DSN Reference
+
+The `driver_dsn` field determines which storage backend Trove uses. Each driver is identified by a URI scheme:
+
+| Driver | DSN Format | Example |
+|--------|-----------|---------|
+| Local filesystem | `file:///path` | `file:///data/storage` |
+| In-memory | `mem://` | `mem://` |
+| Amazon S3 | `s3://bucket?region=...&endpoint=...` | `s3://my-bucket?region=us-east-1` |
+| Google Cloud Storage | `gs://bucket` | `gs://my-bucket` |
+| Azure Blob Storage | `azblob://container` | `azblob://my-container` |
+| SFTP | `sftp://user@host/path` | `sftp://user@storage.example.com/data` |
+
+S3-compatible stores (MinIO, DigitalOcean Spaces, Backblaze B2) use the `s3://` scheme with the `endpoint` query parameter:
 
 ```yaml
-# config.yaml
+driver_dsn: "s3://my-bucket?region=us-east-1&endpoint=https://minio.local:9000"
+```
+
+## Grove Database
+
+The `grove_database` field tells Trove which Grove database instance to use for its metadata tables (buckets, objects, uploads, CAS index, quotas).
+
+- If `grove_database` is set, Trove resolves a **named** Grove DB: `vessel.InjectNamed[*grove.DB](container, name)`
+- If omitted or set to `"default"`, Trove uses the **default** Grove DB: `vessel.Inject[*grove.DB](container)`
+
+This lets you run Trove metadata on a dedicated database separate from your application data by pointing `grove_database` at a named Grove database entry.
+
+## Environment Variables
+
+DSN values and other configuration strings can reference environment variables in your YAML config. This is handled by Forge's config loader:
+
+```yaml
 extensions:
-  grove:
-    driver: postgres
-    dsn: "postgres://prod:secret@db.example.com/myapp"
+  trove:
+    driver_dsn: "${TROVE_DRIVER_DSN}"
+    grove_database: "${TROVE_GROVE_DB:-default}"
 ```
 
-```go
-// Programmatic options
-app.Use(groveext.New(
-    groveext.WithDSN("sqlite", "file::memory:"),  // Ignored — YAML takes precedence
-    groveext.WithDisableMigrate(),                  // Applied — YAML didn't set this
-    groveext.WithMigrations(appMigrations),          // Applied — not a config field
-    groveext.WithHook(&auditHook),                   // Applied — not a config field
-))
-
-// Result: postgres driver from YAML + disable_migrate from programmatic
-```
-
-## Require Config
-
-Use `WithRequireConfig(true)` to fail fast when no YAML config is found:
-
-```go
-app.Use(groveext.New(
-    groveext.WithRequireConfig(true), // Error if no YAML config
-))
-```
-
-This is useful in production to ensure the application doesn't fall back to defaults.
-
-## Config Lookup Order
-
-The extension resolves configuration in this order:
-
-1. **YAML config**: `extensions.grove` key → `grove` key
-2. **Programmatic options**: Values set via `ExtOption` functions
-3. **Defaults**: Empty config (no driver, no DSN)
-
-If no config is found and no programmatic driver is set, the extension returns a clear error:
-
-```
-grove: no driver configured; use WithDriver() or set driver/dsn in config
-```
+This keeps secrets out of config files and lets you vary configuration across environments without changing YAML.

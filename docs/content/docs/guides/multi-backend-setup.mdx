@@ -1,0 +1,275 @@
+---
+title: "Multi-Backend Setup"
+description: "Configure primary, archive, and cache storage backends with pattern-based and function-based routing."
+---
+
+Trove can route objects to different storage backends based on key patterns, bucket names, or custom logic. This guide walks through a complete hot/cold/archive topology with local, S3, and GCS drivers.
+
+## Hot / Cold / Archive Topology
+
+A common pattern uses three tiers:
+
+- **Hot** (local SSD) -- frequently accessed files
+- **Cold** (S3) -- infrequently accessed, cost-optimized
+- **Archive** (GCS Coldline) -- long-term retention, rarely read
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "strings"
+
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/drivers/localdriver"
+    "github.com/xraph/trove/drivers/s3driver"
+    "github.com/xraph/trove/drivers/gcsdriver"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 1. Create the drivers.
+    hot := localdriver.New()
+    hot.Open(ctx, "file:///data/hot-storage")
+
+    cold := s3driver.New()
+    cold.Open(ctx, "s3://access:secret@us-east-1/?endpoint=https://s3.amazonaws.com")
+
+    archive := gcsdriver.New()
+    archive.Open(ctx, "gcs://my-archive-bucket?credentials=/path/to/sa.json")
+
+    // 2. Open Trove with named backends and routing rules.
+    t, err := trove.Open(hot,
+        trove.WithBackend("cold", cold),
+        trove.WithBackend("archive", archive),
+
+        // Pattern routing: archive/* keys go to the archive backend.
+        trove.WithRoute("archive/*", "archive"),
+
+        // Pattern routing: *.log files go to cold storage.
+        trove.WithRoute("*.log", "cold"),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer t.Close(ctx)
+
+    // 3. Objects are routed automatically.
+    t.CreateBucket(ctx, "data")
+
+    // Goes to the hot (default) backend.
+    t.Put(ctx, "data", "config.json", strings.NewReader(`{"key":"value"}`))
+
+    // Goes to the cold backend (matches *.log).
+    t.Put(ctx, "data", "app.log", strings.NewReader("2024-01-01 INFO started"))
+
+    // Goes to the archive backend (matches archive/*).
+    t.Put(ctx, "data", "archive/2023-report.pdf", strings.NewReader("..."))
+}
+```
+
+## Pattern Routing
+
+Pattern routes use `filepath.Match` syntax. They match against the object key (not the bucket).
+
+```go
+trove.WithRoute("*.log", "archive")       // All .log files
+trove.WithRoute("tmp/*", "local")         // Everything under tmp/
+trove.WithRoute("backup/*.gz", "cold")    // Compressed backups
+```
+
+When multiple patterns match, the first registered pattern wins. If no pattern matches, the default (primary) driver handles the operation.
+
+## Function Routing
+
+For complex logic, use `WithRouteFunc`. The function receives the bucket and key, and returns a backend name. Return an empty string to fall through to pattern routes or the default backend.
+
+### Route by File Extension
+
+```go
+t, _ := trove.Open(hot,
+    trove.WithBackend("media", mediaDriver),
+    trove.WithBackend("archive", archiveDriver),
+
+    trove.WithRouteFunc(func(bucket, key string) string {
+        ext := strings.ToLower(filepath.Ext(key))
+        switch ext {
+        case ".jpg", ".png", ".gif", ".webp", ".mp4":
+            return "media"
+        case ".log", ".bak", ".old":
+            return "archive"
+        default:
+            return "" // fall through to default
+        }
+    }),
+)
+```
+
+### Route by Object Size Hint
+
+Use the bucket name as a hint for tiered storage:
+
+```go
+t, _ := trove.Open(hot,
+    trove.WithBackend("cold", coldDriver),
+
+    trove.WithRouteFunc(func(bucket, key string) string {
+        // Route anything in the "large-files" bucket to cold storage.
+        if bucket == "large-files" {
+            return "cold"
+        }
+        return ""
+    }),
+)
+```
+
+## Per-Tenant Backend Routing
+
+In a multi-tenant application, route each tenant to its own storage backend:
+
+```go
+tenantDrivers := map[string]driver.Driver{
+    "acme":    acmeDriver,
+    "globex":  globexDriver,
+}
+
+opts := []trove.Option{}
+for name, drv := range tenantDrivers {
+    opts = append(opts, trove.WithBackend(name, drv))
+}
+
+// Route function extracts tenant from bucket naming convention.
+opts = append(opts, trove.WithRouteFunc(func(bucket, key string) string {
+    // Bucket format: "tenant-{name}"
+    if strings.HasPrefix(bucket, "tenant-") {
+        tenant := strings.TrimPrefix(bucket, "tenant-")
+        if _, ok := tenantDrivers[tenant]; ok {
+            return tenant
+        }
+    }
+    return "" // default backend
+}))
+
+t, _ := trove.Open(defaultDriver, opts...)
+```
+
+## Direct Backend Access
+
+Bypass routing entirely and operate on a specific backend with `Backend()`. This returns a new `*Trove` handle pinned to that backend.
+
+```go
+// Get a handle pinned to the archive backend.
+archiveStore, err := t.Backend("archive")
+if err != nil {
+    log.Fatal(err) // trove.ErrBackendNotFound if name is invalid
+}
+
+// All operations go directly to the archive backend.
+archiveStore.CreateBucket(ctx, "compliance")
+archiveStore.Put(ctx, "compliance", "audit-2024.pdf", reader)
+
+// List objects only in the archive backend.
+iter, _ := archiveStore.List(ctx, "compliance")
+objects, _ := iter.All(ctx)
+for _, obj := range objects {
+    fmt.Println(obj.Key)
+}
+```
+
+The returned handle shares the parent's streaming pool and middleware pipeline, so encryption and compression still apply.
+
+## Fallback Behavior
+
+When no route matches (no pattern match, and all route functions return empty string), the operation goes to the **default (primary) driver** -- the one passed as the first argument to `trove.Open()`.
+
+Route resolution priority:
+
+1. **Route functions** -- checked first, in registration order
+2. **Pattern routes** -- checked next, in registration order
+3. **Default driver** -- used when nothing matches
+
+```go
+t, _ := trove.Open(primaryDriver,                        // 3. fallback
+    trove.WithRoute("*.log", "archive"),                  // 2. pattern
+    trove.WithRouteFunc(func(b, k string) string {        // 1. function
+        if b == "special" { return "special-backend" }
+        return ""
+    }),
+    trove.WithBackend("archive", archiveDriver),
+    trove.WithBackend("special-backend", specialDriver),
+)
+```
+
+## Complete Working Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "io"
+    "log"
+    "path/filepath"
+    "strings"
+
+    "github.com/xraph/trove"
+    "github.com/xraph/trove/driver"
+    "github.com/xraph/trove/drivers/localdriver"
+    "github.com/xraph/trove/drivers/memdriver"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Use local driver for hot storage, memory driver for archive (demo).
+    hot := localdriver.New()
+    hot.Open(ctx, "file:///tmp/trove-multi")
+
+    archive := memdriver.New()
+
+    t, err := trove.Open(hot,
+        trove.WithBackend("archive", archive),
+        trove.WithRoute("archive/*", "archive"),
+        trove.WithRouteFunc(func(bucket, key string) string {
+            if filepath.Ext(key) == ".log" {
+                return "archive"
+            }
+            return ""
+        }),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer t.Close(ctx)
+
+    // Create buckets on each backend.
+    t.CreateBucket(ctx, "data")
+    archiveStore, _ := t.Backend("archive")
+    archiveStore.CreateBucket(ctx, "data")
+
+    // Store objects -- they route automatically.
+    t.Put(ctx, "data", "config.yaml", strings.NewReader("port: 8080"))
+    t.Put(ctx, "data", "server.log", strings.NewReader("INFO: started"))
+    t.Put(ctx, "data", "archive/old-report.csv", strings.NewReader("a,b,c"))
+
+    // Verify routing by listing each backend.
+    fmt.Println("=== Hot (local) ===")
+    iter, _ := t.List(ctx, "data")
+    for {
+        obj, err := iter.Next(ctx)
+        if err == io.EOF { break }
+        fmt.Printf("  %s\n", obj.Key)
+    }
+
+    fmt.Println("=== Archive ===")
+    iter, _ = archiveStore.List(ctx, "data")
+    for {
+        obj, err := iter.Next(ctx)
+        if err == io.EOF { break }
+        fmt.Printf("  %s\n", obj.Key)
+    }
+}
+```

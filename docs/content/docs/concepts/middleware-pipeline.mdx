@@ -1,0 +1,192 @@
+---
+title: "Middleware Pipeline"
+description: "Direction-aware, scope-based middleware pipeline with composable read/write transformations."
+---
+
+Trove's middleware pipeline intercepts the data stream -- not the HTTP request -- so transformations like encryption, compression, and scanning work identically whether you access storage via REST, WebSocket, or the Go API.
+
+## Direction Model
+
+Every middleware declares which data paths it participates in:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `DirectionRead` | Read path | Applies to downloads and `Get` operations |
+| `DirectionWrite` | Write path | Applies to uploads and `Put` operations |
+| `DirectionReadWrite` | Both paths | Applies to both reads and writes |
+
+A direction can be overridden at registration time. For example, a bidirectional middleware can be restricted to reads only for a particular scope.
+
+## Middleware Interfaces
+
+Every middleware implements the base `Middleware` interface:
+
+```go
+type Middleware interface {
+    Name() string
+    Direction() Direction
+}
+```
+
+Concrete middleware then implements one or both data-path interfaces:
+
+```go
+// ReadMiddleware intercepts downloads.
+type ReadMiddleware interface {
+    WrapReader(ctx context.Context, r io.ReadCloser, info *driver.ObjectInfo) (io.ReadCloser, error)
+}
+
+// WriteMiddleware intercepts uploads.
+type WriteMiddleware interface {
+    WrapWriter(ctx context.Context, w io.WriteCloser, key string) (io.WriteCloser, error)
+}
+```
+
+`WrapReader` wraps the content stream after it is retrieved from the driver. `WrapWriter` wraps the content stream before it reaches the driver.
+
+## Scope System
+
+Scopes determine when a middleware is active. They are evaluated at runtime against the request context, bucket, and key.
+
+### Built-in Scopes
+
+| Scope | Description | Example |
+|-------|-------------|---------|
+| `ScopeGlobal{}` | Matches every operation (default) | Always active |
+| `ScopeBucket{Buckets}` | Matches specific bucket names | `&ScopeBucket{Buckets: []string{"uploads"}}` |
+| `ScopeKeyPattern{Patterns}` | Matches key glob patterns | `&ScopeKeyPattern{Patterns: []string{"*.pdf"}}` |
+| `ScopeContentType{Types}` | Matches by content type prefix | `&ScopeContentType{Types: []string{"image/*"}}` |
+| `ScopeFunc{Fn, Desc}` | Arbitrary predicate function | Custom runtime logic |
+
+### Boolean Combinators
+
+Scopes can be combined with boolean logic:
+
+```go
+// Only match PDF files in the "reports" bucket
+scope := &middleware.ScopeAnd{
+    Scopes: []middleware.Scope{
+        &middleware.ScopeBucket{Buckets: []string{"reports"}},
+        &middleware.ScopeKeyPattern{Patterns: []string{"*.pdf"}},
+    },
+}
+
+// Match uploads OR documents buckets
+scope := &middleware.ScopeOr{
+    Scopes: []middleware.Scope{
+        &middleware.ScopeBucket{Buckets: []string{"uploads"}},
+        &middleware.ScopeBucket{Buckets: []string{"documents"}},
+    },
+}
+
+// Everything except the temp bucket
+scope := &middleware.ScopeNot{
+    Inner: &middleware.ScopeBucket{Buckets: []string{"temp"}},
+}
+```
+
+## Registration and Priority
+
+Middleware is registered via `Registration` structs that bind a middleware to a scope, direction override, and priority:
+
+```go
+type Registration struct {
+    Middleware Middleware      // The middleware instance
+    Scope      Scope          // When to activate (default: ScopeGlobal)
+    Direction  Direction      // Override the middleware's Direction() (0 = use default)
+    Priority   int            // Execution order (lower runs first, default: 0)
+}
+```
+
+Register middleware at construction time:
+
+```go
+t, _ := trove.Open(drv,
+    trove.WithMiddleware(encryptor, compressor),                  // Global, both directions
+    trove.WithReadMiddleware(watermarker),                        // Global, reads only
+    trove.WithScopedMiddleware(pdfScope, scanner),                // Scoped, both directions
+    trove.WithMiddlewareAt(-10, rateLimiter),                     // Priority -10 runs first
+)
+```
+
+Or at runtime:
+
+```go
+t.UseMiddleware(middleware.Registration{
+    Middleware: encrypt.New(encrypt.WithKeyProvider(vault)),
+    Scope:     &middleware.ScopeBucket{Buckets: []string{"secrets"}},
+    Priority:  -5,
+})
+
+// Remove middleware by name and scope
+t.RemoveMiddleware("encrypt", &middleware.ScopeBucket{Buckets: []string{"secrets"}})
+```
+
+## Pipeline Resolution
+
+The `Resolver` assembles the effective middleware chain per-operation. For each `Put` or `Get` call, it:
+
+1. Iterates all registrations
+2. Filters by direction (read or write)
+3. Evaluates each scope against the current `(ctx, bucket, key)`
+4. Sorts matching middleware by priority (lower first), then registration order
+5. Returns the ordered pipeline
+
+Results are cached with an LRU cache (1024 entries) that invalidates on registration changes.
+
+```go
+// Internal flow for t.Put(ctx, "uploads", "report.pdf", data):
+pipeline := resolver.ResolveWrite(ctx, "uploads", "report.pdf")
+// Returns: [rateLimiter, scanner, compressor, encryptor] (sorted by priority)
+```
+
+## Built-in Middleware
+
+| Name | Package | Direction | Description |
+|------|---------|-----------|-------------|
+| `encrypt` | `middleware/encrypt` | ReadWrite | AES-256-GCM encryption with pluggable `KeyProvider` |
+| `compress` | `middleware/compress` | ReadWrite | Zstd compression with min-size threshold and skip lists |
+| `dedup` | `middleware/dedup` | Write | Content-hash deduplication with pluggable store |
+| `scan` | `middleware/scan` | Write | Threat scanning with pluggable `Provider` (ClamAV, etc.) |
+| `watermark` | `middleware/watermark` | Read | Invisible metadata watermarking for PNG and JPEG |
+| `cache` | `middleware` | Internal | LRU scope resolution cache (1024 entries) |
+
+## Writing Custom Middleware
+
+Implement the `Middleware` interface plus `ReadMiddleware`, `WriteMiddleware`, or both:
+
+```go
+package logging
+
+import (
+    "context"
+    "io"
+    "log/slog"
+
+    "github.com/xraph/trove/driver"
+    "github.com/xraph/trove/middleware"
+)
+
+type Logger struct{}
+
+func (l *Logger) Name() string                { return "logger" }
+func (l *Logger) Direction() middleware.Direction { return middleware.DirectionReadWrite }
+
+func (l *Logger) WrapWriter(ctx context.Context, w io.WriteCloser, key string) (io.WriteCloser, error) {
+    slog.Info("upload started", "key", key)
+    return w, nil
+}
+
+func (l *Logger) WrapReader(ctx context.Context, r io.ReadCloser, info *driver.ObjectInfo) (io.ReadCloser, error) {
+    slog.Info("download started", "key", info.Key, "size", info.Size)
+    return r, nil
+}
+```
+
+Register it:
+
+```go
+t, _ := trove.Open(drv,
+    trove.WithMiddlewareAt(-100, &logging.Logger{}), // Run first (lowest priority)
+)
+```

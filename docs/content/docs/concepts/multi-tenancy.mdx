@@ -1,127 +1,165 @@
 ---
-title: Multi-Tenancy
-description: How Grove enables tenant data isolation through privacy hooks.
+title: "Multi-Tenancy"
+description: "Tenant isolation with per-tenant keys, quota enforcement, and scoped middleware."
 ---
 
-## Tenant Isolation with Hooks
+Trove provides built-in support for multi-tenant storage through tenant keys on data models, per-tenant quota enforcement, and middleware scoping. When deployed with the Forge extension, tenant identification is handled automatically via the `X-Subject-ID` header.
 
-Grove's privacy hook system provides automatic tenant isolation at the query level. Every query can be intercepted to inject tenant filters, ensuring data from one tenant never leaks to another.
+## Tenant Key Model
 
-Grove does **not** ship a built-in `TenantIsolation` hook or a `WithTenantID()` context helper. Instead, you write your own tenant isolation hook using the standard `PreQueryHook` and `PreMutationHook` interfaces. See the [Tenant Isolation Hook](/docs/hooks/tenant-isolation) page for a complete implementation.
+Every storage model carries a `TenantKey` field that associates the record with a specific tenant:
 
-### With Forge
-
-When running inside Forge, tenant context is typically set by middleware (e.g., from a JWT or API key). You define the context key and helper yourself:
+### Bucket Model
 
 ```go
-// In your middleware
-ctx = myhooks.WithTenantID(ctx, extractedTenantID)
+type Bucket struct {
+    ID        string `json:"id"`
+    Name      string `json:"name"`
+    TenantKey string `json:"tenant_key,omitempty"`
+    // ... other fields
+}
 ```
+
+### Object Model
+
+```go
+type Object struct {
+    ID        string `json:"id"`
+    BucketID  string `json:"bucket_id"`
+    Key       string `json:"key"`
+    TenantKey string `json:"tenant_key,omitempty"`
+    // ... other fields
+}
+```
+
+### Quota Model
+
+Quotas are tracked per-tenant with both byte and object count limits:
+
+```go
+type Quota struct {
+    TenantKey    string `json:"tenant_key"`
+    UsedBytes    int64  `json:"used_bytes"`
+    LimitBytes   int64  `json:"limit_bytes"`
+    ObjectCount  int64  `json:"object_count"`
+    LimitObjects int64  `json:"limit_objects"`
+    UpdatedAt    time.Time `json:"updated_at"`
+}
+```
+
+## Per-Tenant Quota Enforcement
+
+When a tenant's usage exceeds their configured limits, `Put` operations return `trove.ErrQuotaExceeded`:
+
+```go
+// Upload fails when quota is exceeded
+_, err := t.Put(ctx, "uploads", "large-file.bin", data)
+if errors.Is(err, trove.ErrQuotaExceeded) {
+    // Tenant has exceeded their storage quota
+    http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
+}
+```
+
+Quota limits apply to both total bytes and total object count. The Forge extension enforces these limits automatically in the upload handlers.
+
+## Tenant Identification
+
+### With Forge Extension
+
+When running inside Forge, the tenant is identified by the `X-Subject-ID` HTTP header, which is typically set by authentication middleware (e.g., from a JWT or API key).
+
+```
+PUT /api/trove/buckets/uploads/objects/report.pdf
+X-Subject-ID: tenant-abc
+Content-Type: application/pdf
+```
+
+The extension automatically stamps every created bucket and object with the subject ID as the `TenantKey`.
 
 ### Standalone Mode
 
-Without Forge, set tenant context explicitly using your own context helper:
+Without Forge, set the tenant context explicitly using the store's tenant-aware list options or by managing the `TenantKey` field directly when writing metadata:
 
 ```go
-ctx = myhooks.WithTenantID(ctx, "tenant-123")
+// Filter objects by tenant when listing
+objects, err := store.ListObjects(ctx, "uploads",
+    store.WithTenantKey("tenant-abc"),
+)
 ```
 
-Alternatively, you can populate `hook.QueryContext.TenantID` from a higher-priority hook or driver-level middleware.
+## Middleware Scoping by Tenant
 
-## Tenant Isolation Hook
-
-Write a custom hook that implements `hook.PreQueryHook` and `hook.PreMutationHook` to inject `WHERE tenant_id = ?` into every query:
+Use `ScopeFunc` to apply middleware only to specific tenants. This enables per-tenant encryption keys, compression settings, or scanning policies.
 
 ```go
-import "github.com/xraph/grove/hook"
+import "github.com/xraph/trove/middleware"
 
-tenantHook := &myhooks.TenantIsolation{
-    Column:     "tenant_id",
-    SkipTables: []string{"grove_migrations", "settings"},
+// Extract tenant from context
+tenantScope := &middleware.ScopeFunc{
+    Fn: func(ctx context.Context, bucket, key string) bool {
+        tenantID := ctx.Value("tenant_id").(string)
+        return tenantID == "acme-corp"
+    },
+    Desc: "tenant(acme-corp)",
 }
 
-db.Hooks().AddHook(tenantHook, hook.Scope{
-    Priority: 1, // Run before other hooks
-})
+// Encrypt only Acme Corp's data with their key
+t, _ := trove.Open(drv,
+    trove.WithScopedMiddleware(tenantScope,
+        encrypt.New(encrypt.WithKeyProvider(acmeKeyProvider)),
+    ),
+)
 ```
 
-### How It Works
+### Per-Tenant Encryption Keys
 
-1. Before every SELECT, UPDATE, or DELETE query, the hook extracts the tenant ID from context (or from `QueryContext.TenantID`)
-2. It returns a `HookResult` with `Decision: Modify` and an `ExtraFilter` containing the `tenant_id = $1` clause
-3. Before every INSERT, it can validate that the data has the correct tenant ID set
-4. If no tenant ID is in context, the hook returns `Decision: Deny` with an error
+Combine `ScopeFunc` with a dynamic `KeyProvider` that returns different keys per tenant:
 
 ```go
-// This query:
-db.NewSelect(&users).Where("active = $1", true).Scan(ctx)
+type TenantKeyProvider struct {
+    vault VaultClient
+}
 
-// Becomes (after hook injection):
-// SELECT * FROM users WHERE active = $1 AND tenant_id = $2
+func (p *TenantKeyProvider) Key(ctx context.Context) ([]byte, error) {
+    tenantID := ctx.Value("tenant_id").(string)
+    return p.vault.GetKey(ctx, "trove/keys/"+tenantID)
+}
+
+t, _ := trove.Open(drv,
+    trove.WithMiddleware(
+        encrypt.New(encrypt.WithKeyProvider(&TenantKeyProvider{vault: vc})),
+    ),
+)
 ```
 
-## Per-Table Opt-Out
+## Integration with Warden
 
-Not every table needs tenant isolation. The custom hook's `SkipTables` field (or equivalent logic) excludes shared/global tables:
+When used alongside the Warden extension (Forge's authorization engine), Trove checks access policies before every operation. Warden policies can be tenant-scoped:
 
 ```go
-db.Hooks().AddHook(&myhooks.TenantIsolation{
-    Column:     "tenant_id",
-    SkipTables: []string{"settings", "grove_migrations", "feature_flags"},
-}, hook.Scope{Priority: 1})
+// Warden policy: only allow access to own tenant's buckets
+// Policy evaluation happens in the Forge extension's middleware layer
+
+// The X-Subject-ID header identifies the tenant
+// Warden checks: does subject "tenant-abc" have permission to
+// read from bucket "uploads" with tenant_key "tenant-abc"?
 ```
 
-You can also use `hook.Scope` to restrict the hook to specific tables instead:
+This provides defense-in-depth: tenant isolation at the data model level (TenantKey filtering), the quota level (per-tenant limits), the middleware level (scoped transformations), and the authorization level (Warden policies).
 
-```go
-db.Hooks().AddHook(&myhooks.TenantIsolation{
-    Column: "tenant_id",
-}, hook.Scope{
-    Tables:   []string{"users", "invoices", "orders"},
-    Priority: 1,
-})
-```
+## Tenant Isolation Guarantees
 
-## Tenant-Scoped Operations
-
-All CRUD operations are automatically scoped when the hook is active:
-
-```go
-// Creates a user -- hook validates tenant_id on the data
-db.NewInsert(&user).Exec(ctx)
-
-// Lists users for the current tenant only
-db.NewSelect(&users).Scan(ctx)
-
-// Updates only rows belonging to the current tenant
-db.NewUpdate(&user).WherePK().Exec(ctx)
-
-// Deletes only rows belonging to the current tenant
-db.NewDelete(&user).WherePK().Exec(ctx)
-```
+| Layer | Mechanism | Prevents |
+|-------|-----------|----------|
+| Data model | `TenantKey` field on Bucket, Object, Quota | Cross-tenant data access |
+| Quota | Per-tenant byte and object limits | One tenant consuming all storage |
+| Middleware | `ScopeFunc` with tenant predicate | Applying wrong encryption keys |
+| Authorization | Warden policy checks on `X-Subject-ID` | Unauthorized API access |
+| Routing | Per-tenant backend routing | Co-mingling tenant data on disk |
 
 ## Cross-Tenant Prevention
 
-- Queries without a tenant context are denied by the hook (returns an error)
+- Listing operations are scoped by `TenantKey` -- tenants only see their own resources
 - There is no built-in API to query across tenants
-- Admin/superuser bypass requires adding a context flag check at the top of your hook that returns `hook.Skip` for admin users
-
-## KV Store Multi-Tenancy
-
-The KV module provides a dedicated [Namespace middleware](/docs/kv/middleware/namespace) that automatically prefixes all keys with a tenant identifier:
-
-```go
-import (
-    "github.com/xraph/grove/kv"
-    "github.com/xraph/grove/kv/middleware"
-)
-
-store, _ := kv.Open(drv, dsn,
-    kv.WithHook(middleware.NewNamespaceHook("tenant-123")),
-)
-
-// All keys are now prefixed: "tenant-123:user:456"
-store.Set(ctx, "user:456", userData)
-```
-
-This approach provides key-level isolation in shared KV backends like Redis without requiring separate databases per tenant.
+- Admin or superuser access requires explicit bypass logic in your application layer
+- Quota enforcement is per-tenant and cannot be circumvented by API calls

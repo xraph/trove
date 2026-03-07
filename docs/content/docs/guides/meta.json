@@ -1,11 +1,4 @@
 {
   "title": "Guides",
-  "pages": [
-    "basic-crud",
-    "bun-migration",
-    "crdt-offline-first",
-    "crdt-multi-node",
-    "crdt-react-app",
-    "crdt-presence"
-  ]
+  "pages": ["basic-storage", "multi-backend-setup", "middleware-setup", "file-browser", "streaming-uploads"]
 }

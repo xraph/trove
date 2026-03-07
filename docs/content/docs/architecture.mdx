@@ -1,230 +1,515 @@
 ---
-title: Architecture
-description: How Grove's packages, drivers, and query pipeline work together.
+title: "Architecture"
+description: "Trove's layered architecture: storage pipeline, multi-backend routing, middleware, streaming, CAS, and VFS."
 ---
+
+import { Callout } from "fumadocs-ui/components/callout";
 
 ## Package Overview
 
 ```
-grove/
-├── grove.go                    # Top-level DB handle, Open(), convenience methods
-├── model.go                    # Model registration, struct reflection, field cache
-├── schema/                     # Schema introspection & struct tag parsing
-│   ├── table.go                # Table metadata derived from struct tags
-│   ├── field.go                # Field metadata, column mapping
-│   ├── relation.go             # HasOne, HasMany, BelongsTo, ManyToMany
-│   └── tag.go                  # Dual tag parser: grove:"..." + bun:"..." fallback
-├── driver/                     # Driver interface definitions
-│   ├── driver.go               # Core Driver interface
-│   ├── dialect.go              # Dialect interface (quoting, placeholders, types)
-│   ├── result.go               # Unified result/rows interfaces
-│   └── tx.go                   # Transaction interface
-├── pgdriver/                   # PostgreSQL driver (pgx-based)
-├── mysqldriver/                # MySQL driver
-├── sqlitedriver/               # SQLite driver
-├── mongodriver/                # MongoDB driver (native BSON)
-├── hook/                       # Privacy & lifecycle hook system
-├── stream/                     # Streaming iterator & pipeline transforms
-│   ├── stream.go               # Stream[T], New, NewWithHooks, Next, Value, All, Collect
-│   ├── cursor.go               # Cursor interface, DecodeFunc[T]
-│   ├── pipeline.go             # Map, Filter, Reduce, Chunk, Take, ForEach
-│   ├── batch.go                # BatchCursor for paginated sources
-│   └── changefeed.go           # ChangeStream[T], ChangeEvent[T], ChangeSource[T]
-├── migrate/                    # Migration orchestrator (database-agnostic)
-├── scan/                       # High-performance result scanning
-├── internal/                   # Buffer pools, tag parser
-├── grovetest/                  # Testing utilities
-└── kv/                         # Key-Value store module (separate go.mod)
-    ├── store.go                # Core Store: Get, Set, Delete, Exists, MGet, MSet
-    ├── driver/                 # KV driver interface + capabilities
-    ├── codec/                  # Serialization: JSON, MsgPack, Protobuf, Gob
-    ├── keyspace/               # Keyspace[T] typed partitions
-    ├── middleware/              # Hooks: cache, retry, circuit, compress, encrypt, namespace, logging, stampede
-    ├── crdt/                   # CRDT adapter: Counter, Register[T], Set[T], Map, Syncer
-    ├── extension/              # Extensions: lock, ratelimit, session, counter, leaderboard, queue
-    ├── redisdriver/            # Redis driver (go-redis)
-    ├── memcacheddriver/        # Memcached driver (gomemcache)
-    ├── dynamodriver/           # DynamoDB driver (aws-sdk-go-v2)
-    ├── boltdriver/             # BoltDB driver (bbolt)
-    ├── badgerdriver/           # Badger driver (badger/v4)
-    └── kvtest/                 # Conformance test suite + mock driver
-```
-
-## Query Pipeline
-
-When a query is executed, Grove follows this pipeline. The path branches after execution depending on whether results are collected eagerly (`.Scan`) or streamed lazily (`.Stream`):
-
-```
-                    ┌──────────────┐
-                    │  User Code   │
-                    │  db.NewSelect│
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │   Model      │
-                    │   Registry   │  Cached metadata (reflect-once)
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │  Pre-Query   │
-                    │   Hooks      │  Inject filters, deny, modify
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │   Query      │
-                    │   Builder    │  Driver-specific native syntax
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │   Execute    │
-                    │   (Driver)   │  Raw query to database
-                    └──────┬───────┘
-                           │
-              ┌────────────┴────────────┐
-              │                         │
-       ┌──────▼───────┐         ┌──────▼───────┐
-       │   Scan       │         │  Stream[T]   │
-       │   Results    │         │  (Cursor)    │  Lazy, one row at a time
-       └──────┬───────┘         └──────┬───────┘
-              │                        │
-       ┌──────▼───────┐         ┌──────▼───────┐
-       │  Post-Query  │         │  Per-Row     │
-       │   Hooks      │         │  StreamRow   │  Skip, deny, allow per row
-       └──────────────┘         │  Hooks       │
-                                └──────┬───────┘
-                                       │
-                                ┌──────▼───────┐
-                                │  Transforms  │
-                                │  Map/Filter/ │  Composable pipeline ops
-                                │  Reduce/etc  │
-                                └──────────────┘
-```
-
-The **eager path** (left) loads all results into memory via the `scan` package and runs `PostQueryHook` hooks on the complete result set. The **streaming path** (right) opens a server-side cursor via `Stream[T]`, decodes one row at a time, runs `StreamRowHook` hooks per row, and optionally pipes results through pipeline transforms (`Map`, `Filter`, `Reduce`, `Chunk`, `Take`, `ForEach`).
-
-### Typed Access via `Unwrap`
-
-The top-level `grove.DB` returns `any` from query builder methods to avoid import cycles. For typed access to driver-specific builders and streaming, use the driver's `Unwrap` function:
-
-```go
-pgdb := pgdriver.Unwrap(db) // returns *pgdriver.PgDB
-s, err := pgdb.NewSelect(&User{}).Where("active = $1", true).Stream(ctx)
-```
-
-## Key Design Decisions
-
-### 1. Native Syntax Per Driver
-
-Each driver has its own query builder. There is no shared query builder interface. PostgreSQL queries generate `$1` placeholders, MySQL generates `?`, and MongoDB generates native BSON documents.
-
-### 2. Reflect-Once Architecture
-
-Struct reflection happens once at model registration time. The hot query path uses cached field offsets and pooled byte buffers for zero-allocation query building.
-
-### 3. Dual Tag Resolution
-
-When resolving struct tags:
-1. `grove:"..."` tag present — use it (primary)
-2. `bun:"..."` tag present — use it (fallback)
-3. No tag — convert field name to snake_case
-
-### 4. Privacy Hooks, Not Authorization
-
-The hook system provides integration points for authorization libraries but does not implement authorization logic itself. Hooks can inject WHERE clauses, redact fields, or deny queries.
-
-## Module Dependency Graph
-
-```
-grove (core)
-├── grove/schema          (zero deps)
-├── grove/driver          (depends on schema)
-├── grove/scan            (depends on schema)
-├── grove/stream          (zero deps — defines Cursor, Stream[T], pipeline transforms)
-├── grove/hook            (depends on driver)
-├── grove/migrate         (depends on driver)
-├── grove/drivers/pgdriver        (depends on driver, schema, scan, stream, hook)
-├── grove/drivers/mysqldriver     (depends on driver, schema, scan)
-├── grove/drivers/sqlitedriver    (depends on driver, schema, scan)
-├── grove/drivers/mongodriver     (depends on driver, schema, scan, stream)
-├── grove/grovetest       (depends on driver)
-└── grove/kv              (separate module — depends on grove/hook, grove/crdt)
-    ├── kv/driver         (zero deps — KV driver interface)
-    ├── kv/codec          (zero deps — serialization codecs)
-    ├── kv/keyspace       (depends on kv, kv/codec)
-    ├── kv/middleware      (depends on grove/hook)
-    ├── kv/crdt           (depends on kv, grove/crdt)
-    ├── kv/extension      (depends on kv)
-    ├── kv/redisdriver    (depends on kv/driver, go-redis)
-    ├── kv/memcacheddriver(depends on kv/driver, gomemcache)
-    ├── kv/dynamodriver   (depends on kv/driver, aws-sdk-go-v2)
-    ├── kv/boltdriver     (depends on kv/driver, bbolt)
-    ├── kv/badgerdriver   (depends on kv/driver, badger/v4)
-    └── kv/kvtest         (depends on kv, kv/driver)
-```
-
-The `stream` package has no dependencies on other Grove packages. It defines the `Cursor` interface and generic `Stream[T]` type. Drivers depend on `stream` to implement the `Cursor` interface (e.g., `pgdriver.pgCursor`) and to construct `Stream[T]` instances. The `stream.HookRunner` interface avoids a direct dependency on the `hook` package, using an adapter pattern instead.
-
-## Object Storage Architecture
-
-Grove also includes **Trove**, a multi-backend object storage layer. Trove follows the same driver-based architecture as the ORM and KV layers.
-
-### Storage Package Structure
-
-```
 trove/
-├── trove.go                   # Top-level handle, Open(), CRUD delegation
-├── config.go                  # Config: chunk size, pool, checksums, retries
-├── errors.go                  # Sentinel errors
-├── options.go                 # Functional options: WithBackend, WithRoute, etc.
-├── id/                        # TypeID definitions (obj_, bkt_, upl_, ...)
-├── driver/                    # Storage driver interface
-│   ├── driver.go              # Core Driver: Put, Get, Delete, Head, List, Copy
-│   ├── options.go             # PutOption, GetOption, ListOption, etc.
-│   ├── capability.go          # MultipartDriver, PresignDriver, VersioningDriver
-│   ├── dsn.go                 # DSN parser
-│   └── registry.go            # Global driver registry
-├── internal/                  # Internal utilities (zero Forge imports)
-│   ├── checksum.go            # SHA-256, BLAKE3, XXHash integrity verification
-│   └── router.go              # Multi-backend routing (pattern + function)
-├── drivers/                   # All storage backend drivers
-│   ├── localdriver/           # Local filesystem driver
-│   └── memdriver/             # In-memory driver (testing)
-└── trovetest/                 # Conformance test suite + fixtures + mock driver
+├── trove.go              # Core Trove type and operations (Put, Get, Delete, Head, List, Copy)
+├── config.go             # Config type, DefaultConfig(), checksum and retry settings
+├── options.go            # Functional options: WithBackend, WithRoute, WithVFS, etc.
+├── errors.go             # Sentinel errors (ErrNotFound, ErrBucketEmpty, etc.)
+├── driver/               # Driver interface + capability interfaces + option types
+│   ├── driver.go         # Core Driver interface, ObjectInfo, ObjectReader, ObjectIterator
+│   ├── options.go        # PutOption, GetOption, ListOption, CopyOption, BucketOption
+│   ├── capability.go     # MultipartDriver, PresignDriver, VersioningDriver, etc.
+│   ├── dsn.go            # DSN parser for connection strings
+│   └── registry.go       # Global driver registry
+├── drivers/              # Built-in storage backend drivers
+│   ├── localdriver/      # Local filesystem (file:///path DSN)
+│   ├── memdriver/        # In-memory (testing, no persistence)
+│   ├── s3driver/         # AWS S3 / MinIO / S3-compatible
+│   ├── gcsdriver/        # Google Cloud Storage
+│   ├── azuredriver/      # Azure Blob Storage
+│   └── sftpdriver/       # SFTP remote storage
+├── middleware/            # Scope-aware middleware pipeline framework
+│   ├── middleware.go     # Middleware, ReadMiddleware, WriteMiddleware interfaces
+│   ├── registration.go  # Registration type with scope, direction, priority
+│   ├── resolver.go       # Resolver: assembles per-operation pipeline with LRU cache
+│   ├── scope.go          # Scope interface + built-in scopes (Global, Bucket, Key, etc.)
+│   ├── helpers.go        # Convenience constructors: ForBuckets, ForKeys, And, Or, Not
+│   ├── cache.go          # LRU scope cache for resolved pipelines
+│   ├── encrypt/          # AES-256-GCM encryption with KeyProvider interface
+│   ├── compress/         # Zstd compression with min-size and skip-extension logic
+│   ├── dedup/            # Content deduplication via CAS integration
+│   ├── scan/             # Content scanning (virus, policy)
+│   └── watermark/        # Metadata watermarking
+├── stream/               # Managed streaming engine
+│   ├── stream.go         # Stream type, state machine, lifecycle hooks
+│   ├── chunk.go          # Chunk, ChunkAck, ChunkPool (sync.Pool-based)
+│   ├── pool.go           # Pool: concurrency-limited stream manager
+│   ├── backpressure.go   # Backpressure strategies (Block, Drop, Buffer, Adaptive)
+│   └── metrics.go        # Per-stream transfer metrics
+├── cas/                  # Content-addressable storage
+│   ├── cas.go            # CAS type: Store, Retrieve, Exists, Pin, Unpin, GC
+│   ├── index.go          # Index interface + MemoryIndex implementation
+│   ├── hash.go           # Hash algorithms (SHA-256, BLAKE3)
+│   └── gc.go             # Garbage collection cycle
+├── vfs/                  # Virtual filesystem over object storage
+│   ├── vfs.go            # FS type: Stat, ReadDir, Walk, Open, Create, Mkdir, Remove, Rename
+│   ├── file.go           # File type (read/write with io.Pipe)
+│   └── compat.go         # io/fs.FS compatibility adapter
+├── id/                   # TypeID-based identifiers
+│   └── id.go             # ID type, prefixes (obj_, bkt_, str_, chk_, ...), Parse, New
+├── trovetest/            # Conformance test suite for driver implementations
+├── internal/             # Internal utilities (router, checksum)
+│   ├── router.go         # Multi-backend router (pattern + function routing)
+│   └── checksum.go       # SHA-256, BLAKE3, XXHash integrity verification
+└── extension/            # Forge extension for DI and lifecycle integration
 ```
 
-### Storage Pipeline
+## Storage Pipeline
+
+Every Trove operation follows a layered pipeline. Here is the flow for a `Put` (write) operation:
 
 ```
-trove.Put(ctx, bucket, key, reader)
-     │
-     ├── Validate (bucket, key)
-     │
-     ├── Router.Resolve(bucket, key)
-     │    ├── Route Functions (highest priority)
-     │    ├── Pattern Routes  (*.log → archive)
-     │    └── Default Driver  (fallback)
-     │
-     └── driver.Put(ctx, bucket, key, reader)
-            │
-            └── Backend-specific storage
+User Code
+   │
+   t.Put(ctx, bucket, key, reader, opts...)
+   │
+   ├── 1. Validate
+   │       Reject empty bucket or key.
+   │       Apply default bucket if configured.
+   │
+   ├── 2. Middleware Pipeline (Write)
+   │       Resolver evaluates all registrations against
+   │       (ctx, bucket, key). Matching WriteMiddleware
+   │       are sorted by priority and chained.
+   │
+   │       reader → [encrypt] → [compress] → ... → transformed reader
+   │
+   ├── 3. Router
+   │       Resolve the backend for this (bucket, key):
+   │         a. Route functions  (highest priority)
+   │         b. Pattern routes   (filepath.Match)
+   │         c. Default driver   (fallback)
+   │
+   └── 4. Driver
+           drv.Put(ctx, bucket, key, reader, opts...)
+           Backend-specific storage (filesystem, S3, GCS, ...)
 ```
 
-Operations flow through the Router, which resolves the correct backend based on bucket/key matching. Route functions take precedence over pattern routes, which take precedence over the default driver.
+The `Get` (read) path is the reverse for middleware -- data flows from the driver through the read middleware pipeline (e.g., decryption, decompression) before reaching the caller.
 
-### Multi-Backend Routing
+```
+User Code
+   │
+   t.Get(ctx, bucket, key, opts...)
+   │
+   ├── 1. Validate
+   ├── 2. Router → resolve backend
+   ├── 3. Driver.Get → *ObjectReader
+   └── 4. Middleware Pipeline (Read)
+           reader → [decompress] → [decrypt] → ... → caller
+```
 
-Trove supports routing objects to different storage backends:
+## Multi-Backend Routing
+
+The `Router` directs each operation to the correct storage backend based on the bucket and key. It supports three levels of routing, evaluated in priority order.
+
+### Resolution Priority
+
+| Priority | Mechanism | Example |
+| --- | --- | --- |
+| 1 (highest) | Route functions | Custom Go function returning backend name |
+| 2 | Pattern routes | `"*.log" → "archive"` (filepath.Match syntax) |
+| 3 (lowest) | Default driver | The driver passed to `trove.Open()` |
+
+### Configuration
+
+Named backends are registered with `WithBackend`. Routes are added with `WithRoute` (pattern) and `WithRouteFunc` (function).
 
 ```go
-t, _ := trove.Open(primaryDriver,
+t, err := trove.Open(primaryDriver,
+    // Named backends
     trove.WithBackend("archive", archiveDriver),
     trove.WithBackend("cache", cacheDriver),
+
+    // Pattern-based routes
     trove.WithRoute("*.log", "archive"),
+    trove.WithRoute("tmp/*", "cache"),
+
+    // Function-based route
     trove.WithRouteFunc(func(bucket, key string) string {
-        if bucket == "compliance" { return "archive" }
-        return ""
+        if bucket == "compliance" {
+            return "archive"
+        }
+        return "" // empty string = fall through
     }),
 )
 ```
 
-See the [Object Storage documentation](/docs/storage) for details.
+### Direct Backend Access
+
+You can bypass routing entirely and pin operations to a specific backend:
+
+```go
+archiveTrove, err := t.Backend("archive")
+// All operations on archiveTrove go directly to the archive driver.
+archiveTrove.Put(ctx, "backups", "db.sql.gz", reader)
+```
+
+## Middleware Pipeline
+
+The middleware system intercepts the data stream (not HTTP requests), so it works identically whether objects are accessed via the Go API, REST, or WebSocket.
+
+### Direction Model
+
+Each middleware declares which data paths it participates in:
+
+| Direction | Constant | Description |
+| --- | --- | --- |
+| Read | `DirectionRead` | Downloads / Gets -- wraps the reader after the driver |
+| Write | `DirectionWrite` | Uploads / Puts -- wraps the reader before the driver |
+| ReadWrite | `DirectionReadWrite` | Both paths (e.g., encryption, compression) |
+
+### Interfaces
+
+A middleware implements one or both of:
+
+```go
+// ReadMiddleware intercepts data being read (downloaded).
+type ReadMiddleware interface {
+    WrapReader(ctx context.Context, r io.ReadCloser, info *driver.ObjectInfo) (io.ReadCloser, error)
+}
+
+// WriteMiddleware intercepts data being written (uploaded).
+type WriteMiddleware interface {
+    WrapWriter(ctx context.Context, w io.WriteCloser, key string) (io.WriteCloser, error)
+}
+```
+
+### Scope Model
+
+Scopes control when a middleware is active. They are evaluated at runtime against each operation's context, bucket, and key.
+
+| Scope | Constructor | Matches |
+| --- | --- | --- |
+| `ScopeGlobal` | (default) | Every operation |
+| `ScopeBucket` | `ForBuckets("a", "b")` | Specific bucket names |
+| `ScopeKeyPattern` | `ForKeys("*.jpg", "docs/*")` | Glob patterns on keys |
+| `ScopeContentType` | `ForContentTypes("image/*")` | MIME type prefixes |
+| `ScopeFunc` | `When(fn)` | Arbitrary predicate function |
+
+**Boolean combinators** compose scopes:
+
+```go
+// Encrypt images in the "private" bucket only.
+scope := middleware.And(
+    middleware.ForBuckets("private"),
+    middleware.ForKeys("*.jpg", "*.png", "*.gif"),
+)
+
+// Compress everything except the "raw" bucket.
+scope := middleware.Not(middleware.ForBuckets("raw"))
+```
+
+### Registration and Priority
+
+Middleware is registered with a `Registration` struct that binds a middleware instance to a scope, optional direction override, and priority.
+
+```go
+t.UseMiddleware(middleware.Registration{
+    Middleware: encrypt.New(encrypt.WithKeyProvider(kp)),
+    Scope:     middleware.ForBuckets("secrets"),
+    Priority:  -10, // runs before default priority (0)
+})
+```
+
+- **Priority** controls execution order. Lower values run first.
+- **Direction override** allows registering a bidirectional middleware for only reads or writes.
+- The `Resolver` evaluates all registrations, filters by scope match, sorts by priority, and returns the ordered pipeline.
+
+### Pipeline Resolution
+
+The `Resolver` assembles the effective pipeline per-operation with LRU caching:
+
+```
+Registration[]
+   │
+   ├── Filter by direction (Read or Write)
+   ├── Filter by scope match (ctx, bucket, key)
+   ├── Sort by priority (ascending), then registration order
+   │
+   └── Pipeline: [mw1, mw2, mw3, ...]
+```
+
+## Streaming Engine
+
+The streaming engine provides managed, chunked data transfer with backpressure, resumability, and lifecycle hooks. It is used for large object transfers where memory efficiency and progress tracking are critical.
+
+### Stream Lifecycle
+
+```
+          ┌──────────┐
+          │   Idle   │  ← NewStream()
+          └────┬─────┘
+               │ Start()
+          ┌────▼─────┐
+    ┌─────│  Active  │─────┐
+    │     └────┬─────┘     │
+    │ Pause    │ Complete() │ Fail()
+    │          │            │
+┌───▼────┐ ┌──▼────────┐ ┌─▼───────┐
+│ Paused │ │ Completing │ │ Failed  │
+└───┬────┘ └──┬────────┘ └─────────┘
+    │ Resume   │
+    │          │
+    └──────────┘ ┌──────────┐
+               └►│ Completed│
+                 └──────────┘
+```
+
+Terminal states: `Completed`, `Failed`, `Cancelled`. Once a stream reaches a terminal state, no further transitions are possible.
+
+### ChunkPool
+
+The `ChunkPool` wraps `sync.Pool` with fixed-size byte buffers for zero-copy chunk allocation. Buffers are drawn with `Get()` and returned with `Put()`, avoiding garbage collection pressure during large transfers.
+
+```go
+pool := stream.NewChunkPool(8 * 1024 * 1024) // 8 MB chunks
+
+buf := pool.Get()   // allocate or reuse
+defer pool.Put(buf)  // return to pool
+```
+
+### Backpressure Modes
+
+When a consumer cannot keep up with the producer, the backpressure strategy determines behavior:
+
+| Mode | Constant | Behavior |
+| --- | --- | --- |
+| Block | `BackpressureBlock` | Blocks the sender until the consumer catches up (default) |
+| Drop | `BackpressureDrop` | Drops the oldest unacknowledged chunk and retries |
+| Buffer | `BackpressureBuffer` | Spills chunks to an overflow buffer (up to max capacity) |
+| Adaptive | `BackpressureAdaptive` | Dynamically adjusts based on throughput vs. consumption rate |
+
+### Hooks
+
+Streams support four lifecycle hooks:
+
+| Hook | Signature | Called |
+| --- | --- | --- |
+| Progress | `func(Progress)` | Periodically with transfer progress (bytes, percent, speed) |
+| Chunk | `func(*Chunk, ChunkAck)` | After each chunk is sent/acknowledged |
+| Complete | `func(*driver.ObjectInfo)` | When the stream completes successfully |
+| Error | `func(error)` | When the stream encounters an error |
+
+```go
+s, err := t.Stream(ctx, "uploads", "video.mp4", stream.DirectionUpload,
+    stream.WithOnProgress(func(p stream.Progress) {
+        fmt.Printf("progress: %d%%  speed: %.1f MB/s\n", p.Percent, p.Speed/1e6)
+    }),
+    stream.WithOnComplete(func(info *driver.ObjectInfo) {
+        fmt.Printf("upload complete: %s\n", info.ETag)
+    }),
+    stream.WithResumable(),
+    stream.WithBackpressure(stream.BackpressureAdaptive),
+)
+```
+
+## CAS Architecture
+
+The content-addressable storage (CAS) engine stores objects under their content hash, enabling automatic deduplication and integrity verification.
+
+### Core Operations
+
+| Operation | Method | Description |
+| --- | --- | --- |
+| Store | `cas.Store(ctx, reader)` | Hash content, store if new, increment ref count if existing |
+| Retrieve | `cas.Retrieve(ctx, hash)` | Get content by hash |
+| Exists | `cas.Exists(ctx, hash)` | Check if hash exists |
+| Pin | `cas.Pin(ctx, hash)` | Prevent garbage collection |
+| Unpin | `cas.Unpin(ctx, hash)` | Allow garbage collection |
+| GC | `cas.GC(ctx)` | Remove unreferenced, unpinned objects |
+
+### Reference Counting and Pinning
+
+Every `Store` call that produces a duplicate hash increments the reference count instead of storing a copy. When references are removed (via `DecrementRef`), the ref count decreases. Objects with `RefCount == 0` and `Pinned == false` are eligible for garbage collection.
+
+### Garbage Collection Cycle
+
+```
+GC(ctx)
+   │
+   ├── 1. Index.ListUnpinned()
+   │       Returns all entries with RefCount=0 AND Pinned=false
+   │
+   ├── 2. For each entry:
+   │       ├── driver.Delete(bucket, key)  -- remove from storage
+   │       └── index.Delete(hash)          -- remove from index
+   │
+   └── 3. Return GCResult { Scanned, Deleted, FreedBytes, Errors }
+```
+
+### Index Interface
+
+The `Index` interface abstracts the CAS metadata store. The default `MemoryIndex` is suitable for testing. Production deployments should use a database-backed implementation.
+
+```go
+cas := cas.New(driver,
+    cas.WithAlgorithm(cas.AlgSHA256),
+    cas.WithBucket("cas-store"),
+    cas.WithIndex(myDatabaseIndex),
+)
+
+hash, info, err := cas.Store(ctx, reader)
+```
+
+## VFS Architecture
+
+The virtual filesystem (VFS) adapts Trove's flat key/value object storage into a hierarchical directory structure. It provides familiar filesystem operations and compatibility with Go's standard `io/fs.FS` interface.
+
+### Flat-to-Hierarchical Mapping
+
+Object keys are treated as file paths with `"/"` as the directory separator. Directories are inferred from key prefixes and can optionally be represented by zero-length marker objects with a trailing `"/"`.
+
+| Object Key | VFS Path | Type |
+| --- | --- | --- |
+| `docs/readme.md` | `/docs/readme.md` | File |
+| `docs/` | `/docs` | Directory (marker) |
+| `photos/2024/img.jpg` | `/photos/2024/img.jpg` | File |
+
+### Operations
+
+| Operation | Method | Description |
+| --- | --- | --- |
+| Stat | `fs.Stat(ctx, path)` | File info (checks file, then directory children) |
+| ReadDir | `fs.ReadDir(ctx, path)` | List directory entries |
+| Walk | `fs.Walk(ctx, root, fn)` | Recursive traversal |
+| Open | `fs.Open(ctx, path)` | Open file for reading |
+| Create | `fs.Create(ctx, path)` | Create/overwrite file (pipe-based writer) |
+| Mkdir | `fs.Mkdir(ctx, path)` | Create directory marker |
+| Remove | `fs.Remove(ctx, path)` | Delete a file |
+| RemoveAll | `fs.RemoveAll(ctx, path)` | Delete path and all children |
+| Rename | `fs.Rename(ctx, old, new)` | Move/rename via copy + delete |
+
+### Usage
+
+```go
+vfs := t.VFS("documents")
+
+// Create a file.
+f, _ := vfs.Create(ctx, "reports/q4.txt")
+f.Write([]byte("Q4 earnings report"))
+f.Close()
+
+// Read it back.
+f, _ = vfs.Open(ctx, "reports/q4.txt")
+data, _ := io.ReadAll(f)
+f.Close()
+
+// List a directory.
+entries, _ := vfs.ReadDir(ctx, "reports")
+for _, e := range entries {
+    fmt.Println(e.Name(), e.IsDir())
+}
+```
+
+## Capability Interface Model
+
+The core `driver.Driver` interface is intentionally minimal. Advanced features are exposed via optional capability interfaces. Consumers use type assertions to check for and access these capabilities at runtime.
+
+| Capability | Interface | Methods |
+| --- | --- | --- |
+| Multipart uploads | `MultipartDriver` | `InitiateMultipart`, `UploadPart`, `CompleteMultipart`, `AbortMultipart` |
+| Pre-signed URLs | `PresignDriver` | `PresignGet`, `PresignPut` |
+| Object versioning | `VersioningDriver` | `ListVersions`, `GetVersion`, `DeleteVersion`, `RestoreVersion` |
+| Change notifications | `NotificationDriver` | `Watch` (returns `<-chan ObjectEvent`) |
+| Lifecycle rules | `LifecycleDriver` | `SetLifecycle`, `GetLifecycle` |
+| Byte-range reads | `RangeDriver` | `GetRange` (offset + length) |
+| Server-side copy | `ServerCopyDriver` | `ServerCopy` (avoids download + re-upload) |
+
+### Type Assertion Pattern
+
+```go
+drv := t.Driver()
+
+// Check if the driver supports pre-signed URLs.
+if presigner, ok := drv.(driver.PresignDriver); ok {
+    url, err := presigner.PresignGet(ctx, "uploads", "report.pdf", 15*time.Minute)
+    fmt.Println("download URL:", url)
+}
+
+// Check for multipart upload support.
+if mp, ok := drv.(driver.MultipartDriver); ok {
+    uploadID, _ := mp.InitiateMultipart(ctx, "uploads", "large-file.bin")
+    // ... upload parts ...
+    mp.CompleteMultipart(ctx, "uploads", "large-file.bin", uploadID, parts)
+}
+```
+
+This pattern avoids bloating the base `Driver` interface. Drivers only implement the capabilities they support, and callers gracefully degrade when a capability is absent.
+
+## TypeID System
+
+Every entity in Trove uses a `id.ID` type based on [TypeID](https://github.com/jetify-com/typeid). IDs are:
+
+- **Prefixed** -- the prefix identifies the entity type (e.g., `obj_`, `str_`)
+- **K-sortable** -- UUIDv7-based suffix, so lexicographic order matches creation order
+- **Globally unique** -- collision-resistant across distributed systems
+- **URL-safe** -- no special characters, safe for use in paths and query strings
+
+### Prefixes
+
+| Prefix | Entity | Constructor |
+| --- | --- | --- |
+| `obj_` | Object | `id.NewObjectID()` |
+| `bkt_` | Bucket | `id.NewBucketID()` |
+| `upl_` | Upload session | `id.NewUploadSessionID()` |
+| `dwn_` | Download session | `id.NewDownloadSessionID()` |
+| `str_` | Stream | `id.NewStreamID()` |
+| `pol_` | Pool | `id.NewPoolID()` |
+| `ver_` | Version | `id.NewVersionID()` |
+| `chk_` | Chunk | `id.NewChunkID()` |
+
+### Usage
+
+```go
+import "github.com/xraph/trove/id"
+
+// Generate a new object ID.
+objID := id.NewObjectID()
+fmt.Println(objID) // "obj_01h455vb4pex5vsknk084sn02q"
+
+// Parse and validate.
+parsed, err := id.ParseObjectID("obj_01h455vb4pex5vsknk084sn02q")
+
+// Check the prefix.
+fmt.Println(parsed.Prefix()) // "obj"
+
+// IDs implement encoding.TextMarshaler, sql.Scanner, and bson.ValueMarshaler
+// for seamless serialization to JSON, databases, and MongoDB.
+```
+
+## Module Dependency Graph
+
+```
+trove (core)
+├── trove/driver           (zero deps -- defines Driver, ObjectInfo, capability interfaces)
+├── trove/id               (external: go.jetify.com/typeid)
+├── trove/internal          (depends on driver)
+├── trove/middleware         (depends on driver)
+│   ├── middleware/encrypt  (depends on middleware)
+│   ├── middleware/compress (depends on middleware, klauspost/compress)
+│   ├── middleware/dedup    (depends on middleware, cas)
+│   ├── middleware/scan     (depends on middleware)
+│   └── middleware/watermark(depends on middleware)
+├── trove/stream            (depends on driver, id)
+├── trove/cas               (depends on driver)
+├── trove/vfs               (depends on driver -- uses Storage interface to avoid circular import)
+├── trove/drivers/localdriver   (depends on driver)
+├── trove/drivers/memdriver     (depends on driver)
+├── trove/drivers/s3driver      (depends on driver, aws-sdk-go-v2)
+├── trove/drivers/gcsdriver     (depends on driver, cloud.google.com/go/storage)
+├── trove/drivers/azuredriver   (depends on driver, azure-sdk-for-go)
+├── trove/drivers/sftpdriver    (depends on driver, pkg/sftp)
+├── trove/trovetest         (depends on driver)
+└── trove/extension          (depends on trove, Forge framework)
+```
+
+The `stream` package depends only on `driver` and `id` -- no dependency on the core `trove` package. The `vfs` package defines a `Storage` interface mirroring Trove's methods to avoid circular imports. The `cas` package depends only on `driver`, keeping it composable outside of Trove.

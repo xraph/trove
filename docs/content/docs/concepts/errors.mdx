@@ -1,80 +1,148 @@
 ---
-title: Errors
-description: Sentinel errors returned by Grove operations.
+title: "Errors"
+description: "Sentinel errors for storage operations: not found, quota exceeded, driver closed, and more."
 ---
 
-Grove defines sentinel errors for all failure cases. Use `errors.Is()` to check for specific errors.
+Trove defines sentinel errors for all failure cases. Use `errors.Is()` to match specific error conditions regardless of wrapping.
 
-## Query Errors
+## Resource Errors
+
+Errors related to missing or duplicate resources:
 
 | Error | Description |
 |-------|-------------|
-| `ErrNoRows` | Query returned no rows (similar to `sql.ErrNoRows`) |
-| `ErrModelNotRegistered` | Model type was not registered via `RegisterModel()` |
-| `ErrNotSupported` | Operation not supported by the current driver |
+| `ErrNotFound` | A requested resource cannot be found |
+| `ErrBucketNotFound` | A bucket cannot be found |
+| `ErrBucketExists` | Creating a bucket that already exists |
+| `ErrObjectNotFound` | An object cannot be found |
+
+## Validation Errors
+
+Errors related to invalid input:
+
+| Error | Description |
+|-------|-------------|
+| `ErrKeyEmpty` | Object key is empty (required field) |
+| `ErrBucketEmpty` | Bucket name is empty (required field) |
+| `ErrInvalidDSN` | DSN string cannot be parsed |
 
 ## Driver Errors
 
-| Error | Description |
-|-------|-------------|
-| `ErrDriverClosed` | Driver connection pool has been closed |
-| `ErrTxDone` | Transaction has already been committed or rolled back |
-| `ErrInvalidDSN` | Data source name is malformed |
-
-## Migration Errors
+Errors related to driver lifecycle:
 
 | Error | Description |
 |-------|-------------|
-| `ErrMigrationFailed` | A migration function returned an error |
-| `ErrMigrationLocked` | Another process holds the migration lock |
-| `ErrCyclicDependency` | Migration group dependencies form a cycle |
-| `ErrDuplicateVersion` | Two migrations share the same version string |
+| `ErrDriverClosed` | Operation attempted on a closed driver |
+| `ErrNilDriver` | `Open` called with a nil driver |
+| `ErrBackendNotFound` | Named backend does not exist in the router |
 
-## Hook Errors
+## Integrity Errors
 
-| Error | Description |
-|-------|-------------|
-| `ErrHookDenied` | A privacy hook returned `Decision: Deny` |
-| `ErrHookPanic` | A hook panicked during execution (recovered) |
-
-## Schema Errors
+Errors related to data integrity and security:
 
 | Error | Description |
 |-------|-------------|
-| `ErrInvalidTag` | Struct tag has invalid syntax |
-| `ErrNoPrimaryKey` | Model has no field marked as `pk` |
-| `ErrInvalidRelation` | Relation definition is incomplete or incorrect |
+| `ErrChecksumMismatch` | Checksum verification failed -- data may be corrupted |
+| `ErrContentBlocked` | Content rejected by scanning middleware (threat detected) |
 
-## Usage
+## Quota Errors
+
+| Error | Description |
+|-------|-------------|
+| `ErrQuotaExceeded` | Storage quota exceeded for the tenant or bucket |
+
+## Stream Errors
+
+Errors related to streaming and upload sessions:
+
+| Error | Description |
+|-------|-------------|
+| `ErrStreamClosed` | Writing to a closed stream |
+| `ErrStreamNotActive` | Operation requires an active stream |
+| `ErrUploadExpired` | Resumable upload session has expired |
+| `ErrPoolClosed` | Stream pool has been shut down |
+| `ErrMaxStreamsReached` | Pool concurrency limit reached |
+
+## Matching Errors
+
+Always use `errors.Is()` to check for sentinel errors, since errors may be wrapped with additional context:
 
 ```go
-import "github.com/xraph/grove"
+import (
+    "errors"
 
-var users []User
-err := db.NewSelect(&users).
-    Where("active = $1", true).
-    Scan(ctx)
+    "github.com/xraph/trove"
+)
 
-if errors.Is(err, grove.ErrNoRows) {
-    // No matching users found
-}
+reader, err := t.Get(ctx, "data", "report.csv")
+if err != nil {
+    switch {
+    case errors.Is(err, trove.ErrObjectNotFound):
+        // Object does not exist -- return 404
+        http.Error(w, "Not found", http.StatusNotFound)
 
-if errors.Is(err, grove.ErrModelNotRegistered) {
-    // Forgot to call db.RegisterModel((*User)(nil))
+    case errors.Is(err, trove.ErrBucketNotFound):
+        // Bucket does not exist -- return 404
+        http.Error(w, "Bucket not found", http.StatusNotFound)
+
+    case errors.Is(err, trove.ErrChecksumMismatch):
+        // Data corruption detected
+        log.Error("integrity failure", "err", err)
+        http.Error(w, "Data integrity error", http.StatusInternalServerError)
+
+    case errors.Is(err, trove.ErrDriverClosed):
+        // Driver shut down -- service unavailable
+        http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+
+    default:
+        http.Error(w, "Internal error", http.StatusInternalServerError)
+    }
+    return
 }
 ```
 
-## Wrapping
+## HTTP Status Code Mapping
 
-All errors returned by Grove wrap the underlying driver error when available:
+When Trove is used as an HTTP API, sentinel errors map to standard HTTP status codes:
+
+| Error | HTTP Status | Code |
+|-------|-------------|:----:|
+| `ErrNotFound` | Not Found | 404 |
+| `ErrBucketNotFound` | Not Found | 404 |
+| `ErrObjectNotFound` | Not Found | 404 |
+| `ErrBucketExists` | Conflict | 409 |
+| `ErrKeyEmpty` | Bad Request | 400 |
+| `ErrBucketEmpty` | Bad Request | 400 |
+| `ErrInvalidDSN` | Bad Request | 400 |
+| `ErrDriverClosed` | Service Unavailable | 503 |
+| `ErrNilDriver` | Internal Server Error | 500 |
+| `ErrBackendNotFound` | Not Found | 404 |
+| `ErrChecksumMismatch` | Conflict | 409 |
+| `ErrQuotaExceeded` | Insufficient Storage | 507 |
+| `ErrContentBlocked` | Unprocessable Entity | 422 |
+| `ErrStreamClosed` | Gone | 410 |
+| `ErrUploadExpired` | Gone | 410 |
+| `ErrPoolClosed` | Service Unavailable | 503 |
+| `ErrMaxStreamsReached` | Too Many Requests | 429 |
+
+## Creating Application Errors
+
+Wrap Trove sentinel errors to add context without losing the ability to match:
 
 ```go
-err := db.NewSelect(&users).Scan(ctx)
-if err != nil {
-    // Unwrap to get the original pgx/mysql error
-    var pgErr *pgconn.PgError
-    if errors.As(err, &pgErr) {
-        fmt.Println(pgErr.Code) // e.g., "23505" for unique violation
+import "fmt"
+
+func getDocument(ctx context.Context, t *trove.Trove, docID string) error {
+    _, err := t.Get(ctx, "documents", docID)
+    if err != nil {
+        return fmt.Errorf("get document %s: %w", docID, err)
     }
+    return nil
+}
+
+// Callers can still match the original error:
+err := getDocument(ctx, t, "missing.pdf")
+if errors.Is(err, trove.ErrObjectNotFound) {
+    // Matched despite wrapping
 }
 ```

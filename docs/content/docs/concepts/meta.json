@@ -1,12 +1,4 @@
 {
   "title": "Core Concepts",
-  "pages": [
-    "dual-tags",
-    "native-syntax",
-    "zero-reflection",
-    "type-ids",
-    "multi-tenancy",
-    "errors",
-    "benchmarks"
-  ]
+  "pages": ["driver-system", "multi-backend-routing", "middleware-pipeline", "capabilities", "checksums", "type-ids", "errors", "multi-tenancy"]
 }

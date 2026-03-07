@@ -1,9 +1,9 @@
 ---
-title: Type-Safe IDs
-description: Grove uses TypeIDs for type-safe, K-sortable entity identifiers across the Forge ecosystem.
+title: "TypeIDs"
+description: "K-sortable, collision-resistant identifiers with entity-type prefixes for objects, buckets, uploads, and streams."
 ---
 
-Grove uses [TypeID](https://github.com/jetify-com/typeid) for entity identifiers, following the Forge ecosystem convention. TypeIDs are type-safe, K-sortable, and globally unique.
+Every entity in Trove is identified by a TypeID -- a globally unique, K-sortable, URL-safe identifier that encodes both the entity type and a UUIDv7-based suffix.
 
 ## Format
 
@@ -11,55 +11,130 @@ Grove uses [TypeID](https://github.com/jetify-com/typeid) for entity identifiers
 prefix_suffix
 ```
 
-- **prefix** — Identifies the entity type (e.g., `usr` for users)
-- **suffix** — A UUIDv7-based, base32-encoded identifier
+- **prefix** -- Identifies the entity type (e.g., `obj` for objects, `bkt` for buckets)
+- **suffix** -- A UUIDv7-based, base32-encoded identifier
 
-Example: `usr_01h455vb4pex5vsknk084sn02q`
+Example: `obj_01h455vb4pex5vsknk084sn02q`
 
-## Usage in Models
+## Prefix Constants
 
-TypeIDs integrate naturally with Grove's model definitions:
+Each Trove entity type has a dedicated prefix:
+
+| Prefix | Constant | Entity |
+|--------|----------|--------|
+| `obj` | `PrefixObject` | Objects |
+| `bkt` | `PrefixBucket` | Buckets |
+| `upl` | `PrefixUploadSession` | Upload sessions |
+| `dwn` | `PrefixDownloadSession` | Download sessions |
+| `str` | `PrefixStream` | Streams |
+| `pol` | `PrefixPool` | Pools |
+| `ver` | `PrefixVersion` | Versions |
+| `chk` | `PrefixChunk` | Chunks |
+
+## Generating IDs
+
+Use the convenience constructors to generate new IDs for each entity type:
 
 ```go
-import (
-    "go.jetify.com/typeid"
-    "github.com/xraph/grove"
-)
+import "github.com/xraph/trove/id"
 
-type User struct {
-    grove.BaseModel `grove:"table:users,alias:u"`
+objID  := id.NewObjectID()          // obj_01h455vb4pex5vsknk084sn02q
+bktID  := id.NewBucketID()          // bkt_01h455vb4pex5vsknk084sn02q
+uplID  := id.NewUploadSessionID()   // upl_01h455vb4pex5vsknk084sn02q
+strID  := id.NewStreamID()          // str_01h455vb4pex5vsknk084sn02q
+verID  := id.NewVersionID()         // ver_01h455vb4pex5vsknk084sn02q
+chkID  := id.NewChunkID()           // chk_01h455vb4pex5vsknk084sn02q
+```
 
-    ID    typeid.TypeID `grove:"id,pk,type:varchar(36)"`
-    Name  string        `grove:"name,notnull"`
-    Email string        `grove:"email,notnull,unique"`
+Or use the generic constructor with any prefix:
+
+```go
+myID := id.New(id.PrefixObject) // obj_...
+```
+
+## Parsing IDs
+
+Parse a TypeID string into a structured `ID` value:
+
+```go
+// Parse any TypeID
+parsed, err := id.Parse("obj_01h455vb4pex5vsknk084sn02q")
+
+// Parse with prefix validation
+parsed, err := id.ParseWithPrefix("obj_01h455...", id.PrefixObject)    // ok
+parsed, err := id.ParseWithPrefix("bkt_01h455...", id.PrefixObject)    // error: prefix mismatch
+
+// Type-specific parsers
+objID, err := id.ParseObjectID("obj_01h455...")
+bktID, err := id.ParseBucketID("bkt_01h455...")
+uplID, err := id.ParseUploadSessionID("upl_01h455...")
+```
+
+For hardcoded IDs in tests or configuration, use the must-parse variants that panic on error:
+
+```go
+known := id.MustParse("obj_01h455vb4pex5vsknk084sn02q")
+known := id.MustParseWithPrefix("obj_01h455...", id.PrefixObject)
+```
+
+## ID Methods
+
+The `ID` type provides these methods:
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `String()` | `string` | Full TypeID string (`prefix_suffix`) |
+| `Prefix()` | `Prefix` | The prefix component |
+| `IsNil()` | `bool` | Whether this is the zero-value ID |
+| `MarshalText()` | `([]byte, error)` | Text serialization |
+| `UnmarshalText(data)` | `error` | Text deserialization |
+| `Value()` | `(driver.Value, error)` | SQL value for database storage |
+| `Scan(src)` | `error` | SQL scan for database retrieval |
+
+The zero value `id.Nil` represents an unset ID. `IsNil()` returns true and `String()` returns an empty string for nil IDs.
+
+## Database Compatibility
+
+TypeIDs work transparently with SQL databases and MongoDB via standard Go interfaces.
+
+### SQL (PostgreSQL, MySQL, SQLite)
+
+The `ID` type implements `database/sql/driver.Valuer` and `database/sql.Scanner`:
+
+```go
+// Insert -- Value() returns the string representation
+_, err := db.Exec("INSERT INTO objects (id, key) VALUES ($1, $2)", objID, "file.txt")
+
+// Query -- Scan() reads the string back into an ID
+var result id.ID
+err := db.QueryRow("SELECT id FROM objects WHERE key = $1", "file.txt").Scan(&result)
+```
+
+Nil IDs store as SQL `NULL`, making them suitable for optional foreign key columns.
+
+### MongoDB (BSON)
+
+The `ID` type implements `MarshalBSONValue` and `UnmarshalBSONValue` for the mongo-driver v2:
+
+```go
+type Document struct {
+    ID    id.ID  `bson:"_id"`
+    Title string `bson:"title"`
 }
 ```
 
-## Serialization
+IDs are stored as BSON strings, enabling text-based queries and human-readable document inspection.
 
-TypeIDs implement standard Go serialization interfaces:
+## Why TypeIDs
 
-- `encoding.TextMarshaler` / `encoding.TextUnmarshaler`
-- `encoding/json.Marshaler` / `encoding/json.Unmarshaler`
-- `database/sql.Scanner` / `driver.Valuer`
+### K-Sortable
 
-This means they work transparently with JSON APIs, database queries, and text-based protocols.
+TypeIDs are based on UUIDv7, which embeds a millisecond-precision timestamp. IDs sort chronologically by creation time, making database indexes efficient (no random scatter) and eliminating the need for separate `created_at` indexes when ordering by ID.
 
-## K-Sortability
+### Collision-Resistant
 
-TypeIDs are based on UUIDv7, which encodes a timestamp:
+UUIDv7 provides 48 bits of timestamp and 74 bits of randomness, yielding a negligible collision probability even at millions of IDs per second.
 
-- IDs sort chronologically by creation time
-- Database indexes on TypeID columns are efficient (no random scatter)
-- No need for separate `created_at` indexes for ordering
+### Self-Describing
 
-## Forge Ecosystem Convention
-
-All Forge extensions use TypeID prefixes to avoid collisions:
-
-| Extension | Prefix Convention |
-|-----------|-------------------|
-| Grove | Application-defined (e.g., `usr`, `org`, `inv`) |
-| Warden | `wrol`, `wprm`, `wasn`, `wpol` |
-| Chronicle | `cevt`, `clog` |
-| Sentinel | `shst`, `shck` |
+The prefix makes IDs self-documenting. When you see `obj_01h455vb4pex5vsknk084sn02q` in a log or database, you immediately know it refers to an object -- not a bucket, stream, or upload session.
