@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"github.com/xraph/forge/extensions/dashboard/contributor"
+
 	"github.com/xraph/trove/extension/dashboard/components"
 )
 

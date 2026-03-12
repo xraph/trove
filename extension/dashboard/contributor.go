@@ -664,7 +664,7 @@ func (c *Contributor) renderSettings(ctx context.Context) (templ.Component, erro
 		DriverName:         c.trove.Driver().Name(),
 		DriverHealthy:      driverHealthy,
 		DriverCapabilities: capabilities,
-		PoolMaxStreams:      cfg.PoolSize,
+		PoolMaxStreams:     cfg.PoolSize,
 		ChunkSize:          cfg.ChunkSize,
 		PresignSupported:   c.config.PresignSupported,
 	}), nil
