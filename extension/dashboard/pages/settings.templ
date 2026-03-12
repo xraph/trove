@@ -1,6 +1,9 @@
 package pages
 
 import (
+	"strconv"
+
+	"github.com/xraph/forgeui/components/badge"
 	"github.com/xraph/forgeui/components/card"
 	"github.com/xraph/forgeui/components/separator"
 	"github.com/xraph/trove/extension/dashboard/components"
@@ -8,12 +11,18 @@ import (
 
 // SettingsPageData holds the data for the settings page.
 type SettingsPageData struct {
-	StorageDriver string
-	BasePath      string
-	DefaultBucket string
-	CASEnabled    bool
-	Encryption    bool
-	Compression   bool
+	StorageDriver      string
+	BasePath           string
+	DefaultBucket      string
+	CASEnabled         bool
+	Encryption         bool
+	Compression        bool
+	DriverName         string
+	DriverHealthy      bool
+	DriverCapabilities []string
+	PoolMaxStreams      int
+	ChunkSize          int64
+	PresignSupported   bool
 }
 
 templ SettingsPage(data SettingsPageData) {
@@ -23,6 +32,73 @@ templ SettingsPage(data SettingsPageData) {
 			<h1 class="text-3xl font-bold tracking-tight">Settings</h1>
 			<p class="text-muted-foreground mt-1">Trove storage configuration and feature flags.</p>
 		</div>
+		<!-- Driver Details -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					Driver Details
+				}
+			}
+			@card.Content() {
+				@separator.Separator()
+				<dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+					@components.FieldRowExported("Driver Name", settingsValueOrDefault(data.DriverName, "unknown"))
+					<div class="space-y-1">
+						<dt class="text-sm font-medium text-muted-foreground">Health</dt>
+						<dd class="text-sm text-foreground flex items-center gap-2">
+							if data.DriverHealthy {
+								<span class="inline-block h-2.5 w-2.5 rounded-full bg-green-500"></span>
+								Healthy
+							} else {
+								<span class="inline-block h-2.5 w-2.5 rounded-full bg-destructive"></span>
+								Unhealthy
+							}
+						</dd>
+					</div>
+				</dl>
+				if len(data.DriverCapabilities) > 0 {
+					<div class="mt-4 space-y-2">
+						<h4 class="text-sm font-medium text-muted-foreground">Capabilities</h4>
+						<div class="flex items-center gap-2 flex-wrap">
+							for _, cap := range data.DriverCapabilities {
+								@badge.Badge(badge.Props{Variant: badge.VariantSecondary}) {
+									{ cap }
+								}
+							}
+						</div>
+					</div>
+				}
+			}
+		}
+		<!-- Streaming Pool -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					Streaming Pool
+				}
+			}
+			@card.Content() {
+				@separator.Separator()
+				<dl class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
+					@components.FieldRowExported("Max Streams", strconv.Itoa(data.PoolMaxStreams))
+					@components.FieldRowExported("Chunk Size", components.FormatBytes(data.ChunkSize))
+					<div class="space-y-1">
+						<dt class="text-sm font-medium text-muted-foreground">Presign Support</dt>
+						<dd class="text-sm">
+							if data.PresignSupported {
+								@badge.Badge(badge.Props{Variant: badge.VariantDefault}) {
+									Supported
+								}
+							} else {
+								@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+									Not Supported
+								}
+							}
+						</dd>
+					</div>
+				</dl>
+			}
+		}
 		<!-- General Configuration -->
 		@card.Card(card.Props{Class: "rounded-sm"}) {
 			@card.Header() {

@@ -9,10 +9,12 @@ import (
 // BrowserPageData holds the data for the file browser page.
 type BrowserPageData struct {
 	BucketID    string
+	BucketName  string
 	Prefix      string
 	Entries     []components.BrowserEntry
 	Breadcrumbs []components.Breadcrumb
 	Buckets     []*model.Bucket
+	APIBasePath string
 }
 
 templ BrowserPage(data BrowserPageData) {
@@ -42,9 +44,9 @@ templ BrowserPage(data BrowserPageData) {
 			}
 		} else {
 			<!-- Upload Drop Zone -->
-			@components.UploadDropZone(data.BucketID, data.Prefix)
+			@components.UploadDropZone(data.BucketID, data.BucketName, data.Prefix, data.APIBasePath)
 			<!-- File Browser -->
-			@components.FileBrowser(data.BucketID, data.Prefix, data.Entries, data.Breadcrumbs)
+			@components.FileBrowser(data.BucketID, data.BucketName, data.Prefix, data.Entries, data.Breadcrumbs, data.APIBasePath)
 		}
 	</div>
 }

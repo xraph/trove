@@ -1,0 +1,59 @@
+package widgets
+
+import (
+	"strconv"
+
+	"github.com/xraph/forgeui/icons"
+)
+
+// HealthWidgetData holds the data for the health widget.
+type HealthWidgetData struct {
+	DriverName    string
+	DriverHealthy bool
+	CASEnabled    bool
+	TotalBuckets  int
+	TotalObjects  int
+}
+
+templ HealthWidget(data HealthWidgetData) {
+	<div class="p-4 space-y-4">
+		<!-- Driver Status -->
+		<div class="flex items-center justify-between">
+			<div class="flex items-center gap-2">
+				@icons.HardDrive(icons.WithSize(16))
+				<span class="text-sm font-medium">{ data.DriverName }</span>
+			</div>
+			if data.DriverHealthy {
+				<div class="flex items-center gap-1.5">
+					<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
+					<span class="text-xs text-muted-foreground">Healthy</span>
+				</div>
+			} else {
+				<div class="flex items-center gap-1.5">
+					<span class="inline-block h-2 w-2 rounded-full bg-destructive"></span>
+					<span class="text-xs text-muted-foreground">Unhealthy</span>
+				</div>
+			}
+		</div>
+		<!-- Quick Stats -->
+		<div class="grid grid-cols-3 gap-3">
+			@healthStat("Buckets", strconv.Itoa(data.TotalBuckets))
+			@healthStat("Objects", strconv.Itoa(data.TotalObjects))
+			@healthStat("CAS", casStatus(data.CASEnabled))
+		</div>
+	</div>
+}
+
+templ healthStat(label, value string) {
+	<div class="text-center">
+		<p class="text-lg font-bold">{ value }</p>
+		<p class="text-xs text-muted-foreground">{ label }</p>
+	</div>
+}
+
+func casStatus(enabled bool) string {
+	if enabled {
+		return "On"
+	}
+	return "Off"
+}

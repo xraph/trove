@@ -238,6 +238,26 @@ func (s *Store) ListAllObjects(ctx context.Context, limit int) ([]*model.Object,
 	return objects, nil
 }
 
+// UpdateBucket updates an existing bucket record.
+func (s *Store) UpdateBucket(ctx context.Context, b *model.Bucket) error {
+	b.UpdatedAt = time.Now().UTC()
+	return s.update(ctx, b)
+}
+
+// --- CAS Pinning ---
+
+// SetCASPinned sets the pinned state of a CAS entry by hash.
+func (s *Store) SetCASPinned(ctx context.Context, hash string, pinned bool) error {
+	return s.updateFieldsByColumn(ctx, &model.CASEntry{}, "hash", hash, map[string]any{
+		"pinned": pinned,
+	})
+}
+
+// DeleteCASEntry deletes a CAS entry by hash.
+func (s *Store) DeleteCASEntry(ctx context.Context, hash string) error {
+	return s.deleteByColumn(ctx, &model.CASEntry{}, "hash", hash)
+}
+
 // --- Quota Operations ---
 
 // ListQuotas returns all quota records.
@@ -267,6 +287,11 @@ func (s *Store) UpdateQuotaUsage(ctx context.Context, tenantKey string, deltaByt
 func (s *Store) SetQuota(ctx context.Context, q *model.Quota) error {
 	q.UpdatedAt = time.Now().UTC()
 	return s.upsert(ctx, q, "tenant_key")
+}
+
+// DeleteQuota removes a quota by tenant key.
+func (s *Store) DeleteQuota(ctx context.Context, tenantKey string) error {
+	return s.deleteByColumn(ctx, &model.Quota{}, "tenant_key", tenantKey)
 }
 
 // --- List Options ---

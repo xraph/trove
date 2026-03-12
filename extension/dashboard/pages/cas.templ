@@ -5,15 +5,26 @@ import (
 
 	"github.com/xraph/forgeui/components/badge"
 	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/icons"
 	"github.com/xraph/trove/extension/dashboard/components"
 	"github.com/xraph/trove/extension/model"
 )
+
+// GCResultData holds the result of a garbage collection run.
+type GCResultData struct {
+	Scanned      int
+	Deleted      int
+	FreedBytes   int64
+	ErrorMessage string
+}
 
 // CASPageData holds the data for the CAS entries page.
 type CASPageData struct {
 	Entries    []*model.CASEntry
 	TotalCount int
 	Filter     string
+	GCResult   *GCResultData
+	CASEnabled bool
 }
 
 templ CASPage(data CASPageData) {
@@ -26,14 +37,41 @@ templ CASPage(data CASPageData) {
 					{ strconv.Itoa(data.TotalCount) }
 				}
 			</div>
+			if data.CASEnabled {
+				<a
+					href="./cas?action=gc"
+					hx-get="./cas?action=gc"
+					hx-target="closest div.space-y-6"
+					hx-swap="outerHTML"
+					hx-confirm="Run garbage collection? This will remove unreferenced CAS entries."
+					class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground h-8 gap-1.5 px-3 cursor-pointer"
+				>
+					@icons.Trash(icons.WithSize(14))
+					Run GC
+				</a>
+			}
 		</div>
 		<p class="text-muted-foreground">Content-addressable storage index with deduplication tracking.</p>
+		<!-- GC Result Alert -->
+		if data.GCResult != nil {
+			if data.GCResult.ErrorMessage != "" {
+				<div class="rounded-sm border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+					{ data.GCResult.ErrorMessage }
+				</div>
+			} else {
+				<div class="rounded-sm border border-primary/50 bg-primary/10 px-4 py-3 text-sm text-foreground">
+					<strong>GC Complete:</strong> Scanned { strconv.Itoa(data.GCResult.Scanned) } entries,
+					deleted { strconv.Itoa(data.GCResult.Deleted) },
+					freed { components.FormatBytes(data.GCResult.FreedBytes) }.
+				</div>
+			}
+		}
 		<!-- Filters -->
 		<div class="flex flex-wrap items-center gap-3">
 			<div class="flex items-center gap-1 rounded-sm border p-1">
-				@casFilterButton("./cas", "All", data.Filter == "")
-				@casFilterButton("./cas?filter=pinned", "Pinned", data.Filter == "pinned")
-				@casFilterButton("./cas?filter=unpinned", "Unpinned", data.Filter == "unpinned")
+				@casFilterLink("./cas", "All", data.Filter == "")
+				@casFilterLink("./cas?filter=pinned", "Pinned", data.Filter == "pinned")
+				@casFilterLink("./cas?filter=unpinned", "Unpinned", data.Filter == "unpinned")
 			</div>
 		</div>
 		<!-- CAS Table -->
@@ -49,27 +87,29 @@ templ CASPage(data CASPageData) {
 	</div>
 }
 
-// casFilterButton renders a small toggle-style button for CAS filters.
-templ casFilterButton(href string, label string, active bool) {
+// casFilterLink renders a small toggle-style link for CAS filters.
+templ casFilterLink(href string, label string, active bool) {
 	if active {
-		<button
-			class="px-3 py-1 text-xs font-medium rounded-sm bg-primary text-primary-foreground"
+		<a
+			href={ templ.SafeURL(href) }
 			hx-get={ href }
-			hx-target="#content"
+			hx-target="closest div.space-y-6"
 			hx-push-url="true"
-			hx-swap="innerHTML"
+			hx-swap="outerHTML"
+			class="px-3 py-1 text-xs font-medium rounded-sm bg-primary text-primary-foreground cursor-pointer"
 		>
 			{ label }
-		</button>
+		</a>
 	} else {
-		<button
-			class="px-3 py-1 text-xs font-medium rounded-sm text-muted-foreground hover:bg-muted"
+		<a
+			href={ templ.SafeURL(href) }
 			hx-get={ href }
-			hx-target="#content"
+			hx-target="closest div.space-y-6"
 			hx-push-url="true"
-			hx-swap="innerHTML"
+			hx-swap="outerHTML"
+			class="px-3 py-1 text-xs font-medium rounded-sm text-muted-foreground hover:bg-muted cursor-pointer"
 		>
 			{ label }
-		</button>
+		</a>
 	}
 }

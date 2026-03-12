@@ -3,7 +3,9 @@ package components
 import (
 	"strconv"
 
+	"github.com/xraph/forgeui/components/button"
 	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/forgeui/icons"
 	"github.com/xraph/trove/extension/model"
 )
 
@@ -33,6 +35,9 @@ templ CASTable(entries []*model.CASEntry) {
 				@table.Head() {
 					Created
 				}
+				@table.Head() {
+					Actions
+				}
 			}
 		}
 		@table.Body() {
@@ -60,6 +65,36 @@ templ CASTable(entries []*model.CASEntry) {
 						<span class="text-muted-foreground text-sm">
 							{ FormatDate(e.CreatedAt) }
 						</span>
+					}
+					@table.Cell() {
+						if e.Pinned {
+							@button.Button(button.Props{
+								Variant: button.VariantGhost,
+								Size:    button.SizeSm,
+								Attributes: templ.Attributes{
+									"hx-get":      "./cas?action=unpin&hash=" + e.Hash,
+									"hx-target":   "#content",
+									"hx-swap":     "innerHTML",
+									"hx-confirm":  "Unpin this entry? It may be removed during garbage collection.",
+								},
+							}) {
+								@icons.Lock(icons.WithSize(14))
+								Unpin
+							}
+						} else {
+							@button.Button(button.Props{
+								Variant: button.VariantGhost,
+								Size:    button.SizeSm,
+								Attributes: templ.Attributes{
+									"hx-get":    "./cas?action=pin&hash=" + e.Hash,
+									"hx-target": "#content",
+									"hx-swap":   "innerHTML",
+								},
+							}) {
+								@icons.Shield(icons.WithSize(14))
+								Pin
+							}
+						}
 					}
 				}
 			}

@@ -70,6 +70,14 @@ func baseWidgets() []contributor.WidgetDescriptor {
 			RefreshSec:  30,
 			Group:       "Trove",
 		},
+		{
+			ID:          "trove-health",
+			Title:       "System Health",
+			Description: "Driver status and system overview",
+			Size:        "sm",
+			RefreshSec:  30,
+			Group:       "Trove",
+		},
 	}
 }
 

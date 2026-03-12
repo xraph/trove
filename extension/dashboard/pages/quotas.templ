@@ -4,15 +4,20 @@ import (
 	"strconv"
 
 	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/button"
 	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/input"
+	"github.com/xraph/forgeui/icons"
 	"github.com/xraph/trove/extension/dashboard/components"
 	"github.com/xraph/trove/extension/model"
 )
 
 // QuotasPageData holds the data for the quotas page.
 type QuotasPageData struct {
-	Quotas     []*model.Quota
-	TotalCount int
+	Quotas       []*model.Quota
+	TotalCount   int
+	ErrorMessage string
+	ShowForm     bool
 }
 
 templ QuotasPage(data QuotasPageData) {
@@ -25,8 +30,90 @@ templ QuotasPage(data QuotasPageData) {
 					{ strconv.Itoa(data.TotalCount) }
 				}
 			</div>
+			<a
+				href="./quotas?action=show_form"
+				hx-get="./quotas?action=show_form"
+				hx-target="closest div.space-y-6"
+				hx-swap="outerHTML"
+				hx-push-url="false"
+				class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 h-8 gap-1.5 px-3 cursor-pointer"
+			>
+				@icons.Plus(icons.WithSize(14))
+				Create Quota
+			</a>
 		</div>
 		<p class="text-muted-foreground">Storage usage and limits per tenant.</p>
+		<!-- Create Quota Form -->
+		if data.ShowForm || data.ErrorMessage != "" {
+			@card.Card(card.Props{Class: "rounded-sm border-primary/20"}) {
+				@card.Header() {
+					<div class="flex items-center justify-between">
+						@card.Title() {
+							Create New Quota
+						}
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":    "./quotas",
+								"hx-target": "closest div.space-y-6",
+								"hx-swap":   "outerHTML",
+							},
+						}) {
+							@icons.X(icons.WithSize(14))
+						}
+					</div>
+				}
+				@card.Content() {
+					if data.ErrorMessage != "" {
+						<div class="mb-4 rounded-sm border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+							{ data.ErrorMessage }
+						</div>
+					}
+					<form
+						hx-get="./quotas"
+						hx-target="closest div.space-y-6"
+						hx-swap="outerHTML"
+						class="space-y-4"
+					>
+						<input type="hidden" name="action" value="create"/>
+						<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+							<div class="space-y-2">
+								<label class="text-sm font-medium">Tenant Key <span class="text-destructive">*</span></label>
+								@input.Input(input.Props{Name: "tenant_key", Placeholder: "tenant-id", Attributes: templ.Attributes{"required": true}})
+							</div>
+							<div class="space-y-2">
+								<label class="text-sm font-medium">Limit Bytes</label>
+								@input.Input(input.Props{Type: input.TypeNumber, Name: "limit_bytes", Placeholder: "0 = no limit"})
+							</div>
+							<div class="space-y-2">
+								<label class="text-sm font-medium">Limit Objects</label>
+								@input.Input(input.Props{Type: input.TypeNumber, Name: "limit_objects", Placeholder: "0 = no limit"})
+							</div>
+						</div>
+						<div class="flex justify-end gap-2">
+							@button.Button(button.Props{
+								Variant: button.VariantGhost, Size: button.SizeSm,
+								Attributes: templ.Attributes{
+									"hx-get":    "./quotas",
+									"hx-target": "closest div.space-y-6",
+									"hx-swap":   "outerHTML",
+								},
+							}) {
+								Cancel
+							}
+							@button.Button(button.Props{
+								Variant: button.VariantDefault, Size: button.SizeSm,
+								Attributes: templ.Attributes{"type": "submit"},
+							}) {
+								@icons.Plus(icons.WithSize(14))
+								Create
+							}
+						</div>
+					</form>
+				}
+			}
+		}
 		<!-- Quotas Table -->
 		@card.Card(card.Props{Class: "rounded-sm"}) {
 			@card.Content() {

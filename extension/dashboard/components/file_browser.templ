@@ -29,12 +29,12 @@ type Breadcrumb struct {
 }
 
 // FileBrowser renders the full file browser component.
-templ FileBrowser(bucketID string, prefix string, entries []BrowserEntry, breadcrumbs []Breadcrumb) {
+templ FileBrowser(bucketID string, bucketName string, prefix string, entries []BrowserEntry, breadcrumbs []Breadcrumb, apiBasePath string) {
 	@card.Card(card.Props{Class: "rounded-sm"}) {
 		@card.Header() {
 			<div class="space-y-4">
 				<!-- Toolbar -->
-				@BrowserToolbar(bucketID, prefix)
+				@BrowserToolbar(bucketID, bucketName, prefix, apiBasePath)
 				<!-- Breadcrumbs -->
 				@BrowserBreadcrumbs(bucketID, breadcrumbs)
 			</div>
@@ -65,7 +65,7 @@ templ FileBrowser(bucketID string, prefix string, entries []BrowserEntry, breadc
 					}
 					@table.Body() {
 						for _, entry := range entries {
-							@BrowserEntryRow(entry, bucketID)
+							@BrowserEntryRow(entry, bucketID, bucketName, apiBasePath)
 						}
 					}
 				}
@@ -75,11 +75,14 @@ templ FileBrowser(bucketID string, prefix string, entries []BrowserEntry, breadc
 }
 
 // BrowserToolbar renders the action buttons for the file browser.
-templ BrowserToolbar(bucketID string, prefix string) {
+templ BrowserToolbar(bucketID string, bucketName string, prefix string, apiBasePath string) {
 	<div class="flex items-center gap-2 flex-wrap">
 		@button.Button(button.Props{
 			Variant: button.VariantOutline,
 			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"onclick": "document.getElementById('upload-file-input').click()",
+			},
 		}) {
 			@icons.Upload(icons.WithSize(14))
 			Upload
@@ -96,9 +99,9 @@ templ BrowserToolbar(bucketID string, prefix string) {
 			Variant: button.VariantGhost,
 			Size:    button.SizeSm,
 			Attributes: templ.Attributes{
-				"hx-get":      browserURL(bucketID, prefix),
-				"hx-target":   "#content",
-				"hx-swap":     "innerHTML",
+				"hx-get":    browserURL(bucketID, prefix),
+				"hx-target": "#content",
+				"hx-swap":   "innerHTML",
 			},
 		}) {
 			@icons.RefreshCw(icons.WithSize(14))
@@ -134,7 +137,7 @@ templ BrowserBreadcrumbs(bucketID string, breadcrumbs []Breadcrumb) {
 }
 
 // BrowserEntryRow renders a single file or folder row.
-templ BrowserEntryRow(entry BrowserEntry, bucketID string) {
+templ BrowserEntryRow(entry BrowserEntry, bucketID string, bucketName string, apiBasePath string) {
 	if entry.IsFolder {
 		<tr
 			class="border-b transition-colors hover:bg-muted/50 cursor-pointer"
@@ -190,16 +193,25 @@ templ BrowserEntryRow(entry BrowserEntry, bucketID string) {
 				<span class="text-sm text-muted-foreground">{ FormatTimeShort(entry.Modified) }</span>
 			}
 			@table.Cell() {
-				<div class="flex items-center gap-1">
+				<div class="flex items-center gap-1" onclick="event.stopPropagation()">
+					<a
+						href={ templ.SafeURL(objectDownloadURL(apiBasePath, bucketName, entry.FullKey)) }
+						target="_blank"
+						download
+					>
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+						}) {
+							@icons.Download(icons.WithSize(14))
+						}
+					</a>
 					@button.Button(button.Props{
 						Variant: button.VariantGhost,
 						Size:    button.SizeSm,
-					}) {
-						@icons.Download(icons.WithSize(14))
-					}
-					@button.Button(button.Props{
-						Variant: button.VariantGhost,
-						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"onclick": "navigator.clipboard.writeText('" + entry.FullKey + "')",
+						},
 					}) {
 						@icons.Copy(icons.WithSize(14))
 					}
@@ -221,14 +233,18 @@ templ BrowserEntryRow(entry BrowserEntry, bucketID string) {
 	}
 }
 
-// UploadDropZone renders a drag-and-drop upload area.
-templ UploadDropZone(bucketID string, prefix string) {
-	<div class="border-2 border-dashed border-muted-foreground/25 rounded-sm p-8 text-center hover:border-muted-foreground/50 transition-colors">
+// UploadDropZone renders a drag-and-drop upload area with file input and JavaScript upload logic.
+templ UploadDropZone(bucketID string, bucketName string, prefix string, apiBasePath string) {
+	<div
+		id="upload-drop-zone"
+		class="border-2 border-dashed border-muted-foreground/25 rounded-sm p-8 text-center hover:border-muted-foreground/50 transition-colors cursor-pointer"
+		onclick="document.getElementById('upload-file-input').click()"
+	>
 		<div class="flex flex-col items-center gap-2">
 			<span class="text-muted-foreground/40">
 				@icons.Upload(icons.WithSize(32))
 			</span>
-			<p class="text-sm text-muted-foreground">
+			<p id="upload-status-text" class="text-sm text-muted-foreground">
 				Drag and drop files here, or click to browse
 			</p>
 			<p class="text-xs text-muted-foreground/60">
@@ -236,6 +252,104 @@ templ UploadDropZone(bucketID string, prefix string) {
 			</p>
 		</div>
 	</div>
+	<input
+		type="file"
+		id="upload-file-input"
+		class="hidden"
+		multiple
+	/>
+	<script>
+		(function() {
+			var dropZone = document.getElementById('upload-drop-zone');
+			var fileInput = document.getElementById('upload-file-input');
+			var statusText = document.getElementById('upload-status-text');
+			var apiBase = {{ apiBasePath }};
+			var bucket = {{ bucketName }};
+			var pfx = {{ prefix }};
+			var bucketID = {{ bucketID }};
+
+			function uploadFiles(files) {
+				if (!files || files.length === 0) return;
+				var total = files.length;
+				var completed = 0;
+				var failed = 0;
+
+				statusText.textContent = 'Uploading 0/' + total + ' files...';
+				dropZone.classList.add('opacity-70');
+				dropZone.style.pointerEvents = 'none';
+
+				Array.from(files).forEach(function(file) {
+					var objectKey = pfx + file.name;
+					var url = apiBase + '/buckets/' + encodeURIComponent(bucket) + '/objects/' + encodeURIComponent(objectKey);
+
+					fetch(url, {
+						method: 'PUT',
+						headers: {
+							'Content-Type': file.type || 'application/octet-stream',
+						},
+						body: file,
+					}).then(function(resp) {
+						if (!resp.ok) {
+							failed++;
+						}
+					}).catch(function() {
+						failed++;
+					}).finally(function() {
+						completed++;
+						if (completed < total) {
+							statusText.textContent = 'Uploading ' + completed + '/' + total + ' files...';
+						} else {
+							dropZone.classList.remove('opacity-70');
+							dropZone.style.pointerEvents = '';
+							if (failed > 0) {
+								statusText.textContent = 'Upload complete. ' + failed + ' file(s) failed.';
+							} else {
+								statusText.textContent = 'Upload complete!';
+							}
+							// Reload file browser after a short delay.
+							setTimeout(function() {
+								statusText.textContent = 'Drag and drop files here, or click to browse';
+								var refreshURL = './browser?bucket_id=' + encodeURIComponent(bucketID);
+								if (pfx) {
+									refreshURL += '&prefix=' + encodeURIComponent(pfx);
+								}
+								htmx.ajax('GET', refreshURL, {target: '#content', swap: 'innerHTML'});
+							}, 1000);
+						}
+					});
+				});
+			}
+
+			// Drag-and-drop events.
+			dropZone.addEventListener('dragover', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+				dropZone.classList.add('border-primary', 'bg-primary/5');
+				dropZone.classList.remove('border-muted-foreground/25');
+			});
+
+			dropZone.addEventListener('dragleave', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+				dropZone.classList.remove('border-primary', 'bg-primary/5');
+				dropZone.classList.add('border-muted-foreground/25');
+			});
+
+			dropZone.addEventListener('drop', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+				dropZone.classList.remove('border-primary', 'bg-primary/5');
+				dropZone.classList.add('border-muted-foreground/25');
+				uploadFiles(e.dataTransfer.files);
+			});
+
+			// File input change handler.
+			fileInput.addEventListener('change', function() {
+				uploadFiles(fileInput.files);
+				fileInput.value = '';
+			});
+		})();
+	</script>
 }
 
 // browserURL builds a browser URL with bucket and prefix params.
@@ -245,6 +359,11 @@ func browserURL(bucketID, prefix string) string {
 		url += "&prefix=" + prefix
 	}
 	return url
+}
+
+// objectDownloadURL builds a download URL for an object.
+func objectDownloadURL(apiBasePath, bucketName, objectKey string) string {
+	return apiBasePath + "/buckets/" + bucketName + "/objects/" + objectKey
 }
 
 // BuildBrowserEntries converts a list of objects into browser entries,

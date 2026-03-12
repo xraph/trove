@@ -97,6 +97,26 @@ func (s *Store) updateFields(ctx context.Context, model any, pk any, fields map[
 	return fmt.Errorf("store: update fields not supported for this driver")
 }
 
+func (s *Store) updateFieldsByColumn(ctx context.Context, model any, column string, value any, fields map[string]any) error {
+	if s.pg != nil {
+		q := s.pg.NewUpdate(model).Where(column+" = ?", value)
+		for k, v := range fields {
+			q = q.Set(k+" = ?", v)
+		}
+		_, err := q.Exec(ctx)
+		return err
+	}
+	return fmt.Errorf("store: update fields by column not supported for this driver")
+}
+
+func (s *Store) deleteByColumn(ctx context.Context, model any, column string, value any) error {
+	if s.pg != nil {
+		_, err := s.pg.NewDelete(model).Where(column+" = ?", value).Exec(ctx)
+		return err
+	}
+	return fmt.Errorf("store: delete by column not supported for this driver")
+}
+
 func (s *Store) incrementField(ctx context.Context, model any, pk any, field string) error {
 	if s.pg != nil {
 		_, err := s.pg.NewUpdate(model).

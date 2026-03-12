@@ -4,16 +4,20 @@ import (
 	"strconv"
 
 	"github.com/xraph/forgeui/components/badge"
+	"github.com/xraph/forgeui/components/button"
 	"github.com/xraph/forgeui/components/card"
 	"github.com/xraph/forgeui/components/input"
+	"github.com/xraph/forgeui/icons"
 	"github.com/xraph/trove/extension/dashboard/components"
 	"github.com/xraph/trove/extension/model"
 )
 
 // BucketsPageData holds the data for the buckets list page.
 type BucketsPageData struct {
-	Buckets    []*model.Bucket
-	TotalCount int
+	Buckets      []*model.Bucket
+	TotalCount   int
+	ErrorMessage string
+	ShowForm     bool
 }
 
 templ BucketsPage(data BucketsPageData) {
@@ -26,7 +30,105 @@ templ BucketsPage(data BucketsPageData) {
 					{ strconv.Itoa(data.TotalCount) }
 				}
 			</div>
+			<a
+				href="./buckets?action=show_form"
+				hx-get="./buckets?action=show_form"
+				hx-target="closest div.space-y-6"
+				hx-swap="outerHTML"
+				hx-push-url="false"
+				class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all bg-primary text-primary-foreground shadow-xs hover:bg-primary/90 h-8 gap-1.5 px-3 cursor-pointer"
+			>
+				@icons.Plus(icons.WithSize(14))
+				Create Bucket
+			</a>
 		</div>
+		<!-- Create Bucket Form -->
+		if data.ShowForm || data.ErrorMessage != "" {
+			@card.Card(card.Props{Class: "rounded-sm border-primary/20"}) {
+				@card.Header() {
+					<div class="flex items-center justify-between">
+						@card.Title() {
+							Create New Bucket
+						}
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":    "./buckets",
+								"hx-target": "closest div.space-y-6",
+								"hx-swap":   "outerHTML",
+							},
+						}) {
+							@icons.X(icons.WithSize(14))
+						}
+					</div>
+				}
+				@card.Content() {
+					if data.ErrorMessage != "" {
+						<div class="mb-4 rounded-sm border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+							{ data.ErrorMessage }
+						</div>
+					}
+					<form
+						hx-get="./buckets"
+						hx-target="closest div.space-y-6"
+						hx-swap="outerHTML"
+						class="space-y-4"
+					>
+						<input type="hidden" name="action" value="create"/>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+							<div class="space-y-2">
+								<label class="text-sm font-medium">Name <span class="text-destructive">*</span></label>
+								@input.Input(input.Props{Name: "name", Placeholder: "my-bucket", Attributes: templ.Attributes{"required": true}})
+							</div>
+							<div class="space-y-2">
+								<label class="text-sm font-medium">Region</label>
+								@input.Input(input.Props{Name: "region", Placeholder: "us-east-1"})
+							</div>
+						</div>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+							<div class="space-y-2">
+								<label class="text-sm font-medium">Quota (Bytes)</label>
+								@input.Input(input.Props{Type: input.TypeNumber, Name: "quota_bytes", Placeholder: "0 = no limit"})
+							</div>
+							<div class="space-y-2">
+								<label class="text-sm font-medium">Quota (Objects)</label>
+								@input.Input(input.Props{Type: input.TypeNumber, Name: "quota_objects", Placeholder: "0 = no limit"})
+							</div>
+						</div>
+						<div class="flex items-center gap-6">
+							<label class="flex items-center gap-2 text-sm">
+								<input type="checkbox" name="versioning" class="rounded border-border"/>
+								Versioning
+							</label>
+							<label class="flex items-center gap-2 text-sm">
+								<input type="checkbox" name="cas_enabled" class="rounded border-border"/>
+								CAS Enabled
+							</label>
+						</div>
+						<div class="flex justify-end gap-2">
+							@button.Button(button.Props{
+								Variant: button.VariantGhost, Size: button.SizeSm,
+								Attributes: templ.Attributes{
+									"hx-get":    "./buckets",
+									"hx-target": "closest div.space-y-6",
+									"hx-swap":   "outerHTML",
+								},
+							}) {
+								Cancel
+							}
+							@button.Button(button.Props{
+								Variant: button.VariantDefault, Size: button.SizeSm,
+								Attributes: templ.Attributes{"type": "submit"},
+							}) {
+								@icons.Plus(icons.WithSize(14))
+								Create
+							}
+						</div>
+					</form>
+				}
+			}
+		}
 		<!-- Search -->
 		@card.Card(card.Props{Class: "rounded-sm"}) {
 			@card.Content() {

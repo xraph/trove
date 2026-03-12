@@ -6,6 +6,7 @@ import (
 	"github.com/xraph/forgeui/components/badge"
 	"github.com/xraph/forgeui/components/button"
 	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/input"
 	"github.com/xraph/forgeui/components/separator"
 	"github.com/xraph/forgeui/components/table"
 	"github.com/xraph/forgeui/icons"
@@ -15,7 +16,13 @@ import (
 
 // ObjectDetailData holds all data for the object detail page.
 type ObjectDetailData struct {
-	Object *model.Object
+	Object           *model.Object
+	EditingMetadata  bool
+	EditingTags      bool
+	ErrorMessage     string
+	Buckets          []*model.Bucket
+	APIBasePath      string
+	PresignSupported bool
 }
 
 templ ObjectDetailPage(data ObjectDetailData) {
@@ -33,6 +40,12 @@ templ ObjectDetailPage(data ObjectDetailData) {
 		}) {
 			@icons.ChevronLeft(icons.WithSize(16))
 			Back to Objects
+		}
+		<!-- Error Message -->
+		if data.ErrorMessage != "" {
+			<div class="rounded-md border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
+				{ data.ErrorMessage }
+			</div>
 		}
 		<!-- Object Info Card -->
 		@card.Card(card.Props{Class: "rounded-sm"}) {
@@ -79,21 +92,54 @@ templ ObjectDetailPage(data ObjectDetailData) {
 				</dl>
 			}
 			@card.Footer() {
-				<div class="flex items-center gap-2">
+				<div class="flex flex-wrap items-center gap-2">
+					<!-- Download -->
+					<a
+						href={ templ.SafeURL(data.APIBasePath + "/buckets/" + bucketNameByID(data.Buckets, data.Object.BucketID) + "/objects/" + data.Object.Key) }
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						@button.Button(button.Props{
+							Variant: button.VariantOutline,
+							Size:    button.SizeSm,
+						}) {
+							@icons.Download(icons.WithSize(14))
+							Download
+						}
+					</a>
+					<!-- Copy Key -->
 					@button.Button(button.Props{
 						Variant: button.VariantOutline,
 						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"onclick": "navigator.clipboard.writeText('" + data.Object.Key + "')",
+						},
 					}) {
-						@icons.Download(icons.WithSize(14))
-						Download
-					}
-					@button.Button(button.Props{
-						Variant: button.VariantOutline,
-						Size:    button.SizeSm,
-					}) {
-						@icons.Copy(icons.WithSize(14))
+						@icons.Clipboard(icons.WithSize(14))
 						Copy Key
 					}
+					<!-- Copy Object (reveals inline form) -->
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"onclick": "document.getElementById('copy-object-form').classList.toggle('hidden')",
+						},
+					}) {
+						@icons.Copy(icons.WithSize(14))
+						Copy Object
+					}
+					<!-- Generate Presigned URL -->
+					if data.PresignSupported {
+						@button.Button(button.Props{
+							Variant: button.VariantOutline,
+							Size:    button.SizeSm,
+						}) {
+							@icons.Link(icons.WithSize(14))
+							Generate URL
+						}
+					}
+					<!-- Delete -->
 					@button.Button(button.Props{
 						Variant: button.VariantDestructive,
 						Size:    button.SizeSm,
@@ -107,6 +153,56 @@ templ ObjectDetailPage(data ObjectDetailData) {
 						@icons.Trash(icons.WithSize(14))
 						Delete
 					}
+				</div>
+				<!-- Copy Object Inline Form -->
+				<div id="copy-object-form" class="hidden mt-4 p-4 border rounded-md space-y-4">
+					<h4 class="text-sm font-medium">Copy Object to Another Bucket</h4>
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+						<div class="space-y-2">
+							<label class="text-sm font-medium">Destination Bucket</label>
+							<select
+								name="dest_bucket_id"
+								class="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+							>
+								for _, b := range data.Buckets {
+									<option value={ b.ID }>{ b.Name }</option>
+								}
+							</select>
+						</div>
+						<div class="space-y-2">
+							<label class="text-sm font-medium">Destination Key</label>
+							@input.Input(input.Props{
+								Name:        "dest_key",
+								Type:        input.TypeText,
+								Value:       data.Object.Key,
+								Placeholder: "object key",
+							})
+						</div>
+					</div>
+					<div class="flex items-center gap-2">
+						@button.Button(button.Props{
+							Variant: button.VariantDefault,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":     "./objects/detail?object_id=" + data.Object.ID + "&action=copy",
+								"hx-target":  "#content",
+								"hx-swap":    "innerHTML",
+								"hx-include": "[name='dest_bucket_id'],[name='dest_key']",
+							},
+						}) {
+							@icons.Copy(icons.WithSize(14))
+							Copy
+						}
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"onclick": "document.getElementById('copy-object-form').classList.add('hidden')",
+							},
+						}) {
+							Cancel
+						}
+					</div>
 				</div>
 			}
 		}
@@ -126,10 +222,10 @@ templ ObjectDetailPage(data ObjectDetailData) {
 				}
 			}
 		}
-		<!-- Metadata Card -->
-		if len(data.Object.Metadata) > 0 {
-			@card.Card(card.Props{Class: "rounded-sm"}) {
-				@card.Header() {
+		<!-- Metadata Card (always shown) -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-3">
 						@card.Title() {
 							Metadata
@@ -138,16 +234,50 @@ templ ObjectDetailPage(data ObjectDetailData) {
 							{ metadataCount(data.Object.Metadata) }
 						}
 					</div>
-				}
-				@card.Content() {
-					@keyValueTable(data.Object.Metadata)
+					if data.EditingMetadata {
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":    "./objects/detail?object_id=" + data.Object.ID,
+								"hx-target": "#content",
+								"hx-swap":   "innerHTML",
+							},
+						}) {
+							Cancel
+						}
+					} else {
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":    "./objects/detail?object_id=" + data.Object.ID + "&action=edit_metadata",
+								"hx-target": "#content",
+								"hx-swap":   "innerHTML",
+							},
+						}) {
+							@icons.Pencil(icons.WithSize(14))
+							Edit Metadata
+						}
+					}
+				</div>
+			}
+			@card.Content() {
+				if data.EditingMetadata {
+					@editableKeyValueForm(data.Object.ID, "metadata", data.Object.Metadata, "save_metadata")
+				} else {
+					if len(data.Object.Metadata) > 0 {
+						@keyValueTable(data.Object.Metadata)
+					} else {
+						<p class="text-sm text-muted-foreground italic">No metadata set.</p>
+					}
 				}
 			}
 		}
-		<!-- Tags Card -->
-		if len(data.Object.Tags) > 0 {
-			@card.Card(card.Props{Class: "rounded-sm"}) {
-				@card.Header() {
+		<!-- Tags Card (always shown) -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-3">
 						@card.Title() {
 							Tags
@@ -156,11 +286,95 @@ templ ObjectDetailPage(data ObjectDetailData) {
 							{ metadataCount(data.Object.Tags) }
 						}
 					</div>
-				}
-				@card.Content() {
-					@keyValueTable(data.Object.Tags)
+					if data.EditingTags {
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":    "./objects/detail?object_id=" + data.Object.ID,
+								"hx-target": "#content",
+								"hx-swap":   "innerHTML",
+							},
+						}) {
+							Cancel
+						}
+					} else {
+						@button.Button(button.Props{
+							Variant: button.VariantGhost,
+							Size:    button.SizeSm,
+							Attributes: templ.Attributes{
+								"hx-get":    "./objects/detail?object_id=" + data.Object.ID + "&action=edit_tags",
+								"hx-target": "#content",
+								"hx-swap":   "innerHTML",
+							},
+						}) {
+							@icons.Pencil(icons.WithSize(14))
+							Edit Tags
+						}
+					}
+				</div>
+			}
+			@card.Content() {
+				if data.EditingTags {
+					@editableKeyValueForm(data.Object.ID, "tag", data.Object.Tags, "save_tags")
+				} else {
+					if len(data.Object.Tags) > 0 {
+						@keyValueTable(data.Object.Tags)
+					} else {
+						<p class="text-sm text-muted-foreground italic">No tags set.</p>
+					}
 				}
 			}
+		}
+	</div>
+}
+
+// editableKeyValueForm renders an editable key-value pair form for metadata or tags.
+templ editableKeyValueForm(objectID string, prefix string, kv map[string]string, action string) {
+	<div class="space-y-4">
+		<div class="space-y-2">
+			for i, pair := range mapToSlice(kv) {
+				<div class="grid grid-cols-2 gap-2">
+					@input.Input(input.Props{
+						Name:        prefix + "_key_" + strconv.Itoa(i),
+						Type:        input.TypeText,
+						Value:       pair.Key,
+						Placeholder: "Key",
+					})
+					@input.Input(input.Props{
+						Name:        prefix + "_val_" + strconv.Itoa(i),
+						Type:        input.TypeText,
+						Value:       pair.Value,
+						Placeholder: "Value",
+					})
+				</div>
+			}
+			<!-- Empty row for adding new pair -->
+			<div class="grid grid-cols-2 gap-2">
+				@input.Input(input.Props{
+					Name:        prefix + "_key_" + strconv.Itoa(len(kv)),
+					Type:        input.TypeText,
+					Placeholder: "New key",
+				})
+				@input.Input(input.Props{
+					Name:        prefix + "_val_" + strconv.Itoa(len(kv)),
+					Type:        input.TypeText,
+					Placeholder: "New value",
+				})
+			</div>
+		</div>
+		@button.Button(button.Props{
+			Variant: button.VariantDefault,
+			Size:    button.SizeSm,
+			Attributes: templ.Attributes{
+				"hx-get":     "./objects/detail?object_id=" + objectID + "&action=" + action + "&count=" + strconv.Itoa(len(kv)+1),
+				"hx-target":  "#content",
+				"hx-swap":    "innerHTML",
+				"hx-include": "[name^='" + prefix + "_']",
+			},
+		}) {
+			@icons.Save(icons.WithSize(14))
+			Save
 		}
 	</div>
 }
@@ -191,6 +405,29 @@ templ keyValueTable(kv map[string]string) {
 			}
 		}
 	}
+}
+
+// kvPair holds a single key-value pair for indexed iteration.
+type kvPair struct {
+	Key   string
+	Value string
+}
+
+func mapToSlice(m map[string]string) []kvPair {
+	pairs := make([]kvPair, 0, len(m))
+	for k, v := range m {
+		pairs = append(pairs, kvPair{Key: k, Value: v})
+	}
+	return pairs
+}
+
+func bucketNameByID(buckets []*model.Bucket, bucketID string) string {
+	for _, b := range buckets {
+		if b.ID == bucketID {
+			return b.Name
+		}
+	}
+	return ""
 }
 
 func metadataCount(m map[string]string) string {

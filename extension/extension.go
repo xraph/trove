@@ -15,6 +15,7 @@ import (
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
+	"github.com/xraph/trove/driver"
 	"github.com/xraph/trove/drivers/memdriver"
 	trovedash "github.com/xraph/trove/extension/dashboard"
 	extmigrate "github.com/xraph/trove/extension/migrate"
@@ -158,16 +159,21 @@ func (e *Extension) Store() *store.Store {
 // LocalContributor that renders trove pages, widgets, and settings in the
 // Forge dashboard using templ + ForgeUI.
 func (e *Extension) DashboardContributor() contributor.LocalContributor {
+	// Check if driver supports presigned URLs.
+	_, presignSupported := e.t.Driver().(driver.PresignDriver)
+
 	return trovedash.New(
 		trovedash.NewManifest(),
 		e.store,
+		e.t,
 		trovedash.ContributorConfig{
-			StorageDriver: e.config.StorageDriver,
-			BasePath:      e.config.BasePath,
-			DefaultBucket: e.config.DefaultBucket,
-			CASEnabled:    e.config.EnableCAS,
-			Encryption:    e.config.EnableEncryption,
-			Compression:   e.config.EnableCompression,
+			StorageDriver:    e.config.StorageDriver,
+			BasePath:         e.config.BasePath,
+			DefaultBucket:    e.config.DefaultBucket,
+			CASEnabled:       e.config.EnableCAS,
+			Encryption:       e.config.EnableEncryption,
+			Compression:      e.config.EnableCompression,
+			PresignSupported: presignSupported,
 		},
 	)
 }

@@ -4,13 +4,13 @@ go 1.25.7
 
 require (
 	github.com/a-h/templ v0.3.977
-	github.com/xraph/chronicle v0.2.0
+	github.com/xraph/chronicle v1.3.0
 	github.com/xraph/dispatch v0.1.0
-	github.com/xraph/forge v1.2.0
-	github.com/xraph/forgeui v1.2.0
+	github.com/xraph/forge v1.3.0
+	github.com/xraph/forgeui v1.3.0
 	github.com/xraph/go-utils v1.0.0
-	github.com/xraph/grove v1.0.0
-	github.com/xraph/grove/drivers/pgdriver v1.0.0
+	github.com/xraph/grove v1.3.0
+	github.com/xraph/grove/drivers/pgdriver v1.3.0
 	github.com/xraph/trove v0.0.0
 	github.com/xraph/vault v0.1.0
 	github.com/xraph/vessel v1.0.0

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/xraph/forgeui/components/button"
 	"github.com/xraph/forgeui/components/table"
+	"github.com/xraph/forgeui/icons"
 	"github.com/xraph/trove/extension/model"
 )
 
@@ -27,6 +29,9 @@ templ QuotaTable(quotas []*model.Quota) {
 				}
 				@table.Head() {
 					Updated
+				}
+				@table.Head() {
+					Actions
 				}
 			}
 		}
@@ -59,6 +64,33 @@ templ QuotaTable(quotas []*model.Quota) {
 						<span class="text-muted-foreground text-sm">
 							{ FormatTimeShort(q.UpdatedAt) }
 						</span>
+					}
+					@table.Cell() {
+						<div class="flex items-center gap-1">
+							@button.Button(button.Props{
+								Variant: button.VariantGhost,
+								Size:    button.SizeSm,
+								Attributes: templ.Attributes{
+									"hx-get":    "./quotas?action=edit&tenant_key=" + q.TenantKey,
+									"hx-target": "#content",
+									"hx-swap":   "innerHTML",
+								},
+							}) {
+								@icons.Pencil(icons.WithSize(14))
+							}
+							@button.Button(button.Props{
+								Variant: button.VariantGhost,
+								Size:    button.SizeSm,
+								Attributes: templ.Attributes{
+									"hx-get":      "./quotas?action=delete&tenant_key=" + q.TenantKey,
+									"hx-target":   "#content",
+									"hx-swap":     "innerHTML",
+									"hx-confirm":  "Delete quota for tenant \"" + q.TenantKey + "\"? This cannot be undone.",
+								},
+							}) {
+								@icons.Trash(icons.WithSize(14))
+							}
+						</div>
 					}
 				}
 			}

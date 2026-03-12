@@ -5,7 +5,10 @@ import (
 
 	"github.com/xraph/forgeui/components/button"
 	"github.com/xraph/forgeui/components/card"
+	"github.com/xraph/forgeui/components/checkbox"
+	"github.com/xraph/forgeui/components/input"
 	"github.com/xraph/forgeui/components/separator"
+	"github.com/xraph/forgeui/components/textarea"
 	"github.com/xraph/forgeui/icons"
 	"github.com/xraph/trove/extension/dashboard/components"
 	"github.com/xraph/trove/extension/model"
@@ -13,10 +16,12 @@ import (
 
 // BucketDetailData holds all data for the bucket detail page.
 type BucketDetailData struct {
-	Bucket      *model.Bucket
-	ObjectCount int
-	TotalSize   int64
-	Objects     []*model.Object
+	Bucket       *model.Bucket
+	ObjectCount  int
+	TotalSize    int64
+	Objects      []*model.Object
+	EditMode     bool
+	ErrorMessage string
 }
 
 templ BucketDetailPage(data BucketDetailData) {
@@ -34,6 +39,12 @@ templ BucketDetailPage(data BucketDetailData) {
 		}) {
 			@icons.ChevronLeft(icons.WithSize(16))
 			Back to Buckets
+		}
+		<!-- Error Message -->
+		if data.ErrorMessage != "" {
+			<div class="rounded-md border border-destructive bg-destructive/10 p-4 text-sm text-destructive">
+				{ data.ErrorMessage }
+			</div>
 		}
 		<!-- Bucket Info Card -->
 		@card.Card(card.Props{Class: "rounded-sm"}) {
@@ -85,6 +96,18 @@ templ BucketDetailPage(data BucketDetailData) {
 						Browse Files
 					}
 					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":      "./buckets/detail?bucket_id=" + data.Bucket.ID + "&action=edit",
+							"hx-target":   "#content",
+							"hx-swap":     "innerHTML",
+						},
+					}) {
+						@icons.Pencil(icons.WithSize(14))
+						Edit
+					}
+					@button.Button(button.Props{
 						Variant: button.VariantDestructive,
 						Size:    button.SizeSm,
 						Attributes: templ.Attributes{
@@ -115,23 +138,40 @@ templ BucketDetailPage(data BucketDetailData) {
 				}
 			}
 			@card.Content() {
+				if data.EditMode {
+					@bucketEditForm(data)
+				} else {
+					@bucketReadOnlyConfig(data)
+				}
+			}
+		}
+		<!-- Lifecycle Rules Card -->
+		@card.Card(card.Props{Class: "rounded-sm"}) {
+			@card.Header() {
+				@card.Title() {
+					Lifecycle Rules
+				}
+			}
+			@card.Content() {
 				<div class="space-y-4">
-					<div class="flex items-center gap-4">
-						@components.BoolBadgeExported("Versioning", data.Bucket.Versioning)
-						@components.BoolBadgeExported("CAS Enabled", data.Bucket.CASEnabled)
-					</div>
-					if len(data.Bucket.DefaultMeta) > 0 {
-						<div class="space-y-2">
-							<h4 class="text-sm font-medium">Default Metadata</h4>
-							<div class="grid grid-cols-2 gap-2">
-								for k, v := range data.Bucket.DefaultMeta {
-									<div class="text-sm">
-										<span class="text-muted-foreground">{ k }:</span>
-										<span>{ v }</span>
-									</div>
-								}
-							</div>
-						</div>
+					@textarea.Textarea(textarea.Props{
+						Name:        "lifecycle",
+						Placeholder: "[]",
+						Rows:        6,
+						Value:       lifecycleJSON(data.Bucket.Lifecycle),
+					})
+					@button.Button(button.Props{
+						Variant: button.VariantOutline,
+						Size:    button.SizeSm,
+						Attributes: templ.Attributes{
+							"hx-get":     "./buckets/detail?bucket_id=" + data.Bucket.ID + "&action=save_lifecycle",
+							"hx-target":  "#content",
+							"hx-swap":    "innerHTML",
+							"hx-include": "[name='lifecycle']",
+						},
+					}) {
+						@icons.Save(icons.WithSize(14))
+						Save Lifecycle
 					}
 				</div>
 			}
@@ -168,6 +208,112 @@ templ BucketDetailPage(data BucketDetailData) {
 	</div>
 }
 
+// bucketReadOnlyConfig renders the read-only configuration view.
+templ bucketReadOnlyConfig(data BucketDetailData) {
+	<div class="space-y-4">
+		<div class="flex items-center gap-4">
+			@components.BoolBadgeExported("Versioning", data.Bucket.Versioning)
+			@components.BoolBadgeExported("CAS Enabled", data.Bucket.CASEnabled)
+		</div>
+		if len(data.Bucket.DefaultMeta) > 0 {
+			<div class="space-y-2">
+				<h4 class="text-sm font-medium">Default Metadata</h4>
+				<div class="grid grid-cols-2 gap-2">
+					for k, v := range data.Bucket.DefaultMeta {
+						<div class="text-sm">
+							<span class="text-muted-foreground">{ k }:</span>
+							<span>{ v }</span>
+						</div>
+					}
+				</div>
+			</div>
+		}
+	</div>
+}
+
+// bucketEditForm renders the editable configuration form.
+templ bucketEditForm(data BucketDetailData) {
+	<div class="space-y-6">
+		<!-- Checkboxes -->
+		<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+			<div class="flex items-center gap-3">
+				@checkbox.Checkbox(checkbox.Props{
+					Name:    "versioning",
+					Checked: data.Bucket.Versioning,
+					Value:   "on",
+				})
+				<label class="text-sm font-medium">Versioning</label>
+			</div>
+			<div class="flex items-center gap-3">
+				@checkbox.Checkbox(checkbox.Props{
+					Name:    "cas_enabled",
+					Checked: data.Bucket.CASEnabled,
+					Value:   "on",
+				})
+				<label class="text-sm font-medium">CAS Enabled</label>
+			</div>
+		</div>
+		<!-- Numeric Inputs -->
+		<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+			<div class="space-y-2">
+				<label class="text-sm font-medium">Quota Bytes</label>
+				@input.Input(input.Props{
+					Name:        "quota_bytes",
+					Type:        input.TypeNumber,
+					Value:       formatInt64(data.Bucket.QuotaBytes),
+					Placeholder: "0 = no limit",
+				})
+			</div>
+			<div class="space-y-2">
+				<label class="text-sm font-medium">Quota Objects</label>
+				@input.Input(input.Props{
+					Name:        "quota_objects",
+					Type:        input.TypeNumber,
+					Value:       formatInt64(data.Bucket.QuotaObjects),
+					Placeholder: "0 = no limit",
+				})
+			</div>
+		</div>
+		<!-- Region Input -->
+		<div class="space-y-2">
+			<label class="text-sm font-medium">Region</label>
+			@input.Input(input.Props{
+				Name:        "region",
+				Type:        input.TypeText,
+				Value:       data.Bucket.Region,
+				Placeholder: "e.g. us-east-1",
+			})
+		</div>
+		<!-- Action Buttons -->
+		<div class="flex items-center gap-2">
+			@button.Button(button.Props{
+				Variant: button.VariantDefault,
+				Size:    button.SizeSm,
+				Attributes: templ.Attributes{
+					"hx-get":     "./buckets/detail?bucket_id=" + data.Bucket.ID + "&action=save",
+					"hx-target":  "#content",
+					"hx-swap":    "innerHTML",
+					"hx-include": "[name='versioning'],[name='cas_enabled'],[name='quota_bytes'],[name='quota_objects'],[name='region']",
+				},
+			}) {
+				@icons.Save(icons.WithSize(14))
+				Save
+			}
+			@button.Button(button.Props{
+				Variant: button.VariantGhost,
+				Size:    button.SizeSm,
+				Attributes: templ.Attributes{
+					"hx-get":    "./buckets/detail?bucket_id=" + data.Bucket.ID,
+					"hx-target": "#content",
+					"hx-swap":   "innerHTML",
+				},
+			}) {
+				Cancel
+			}
+		</div>
+	</div>
+}
+
 func quotaDisplay(bytes int64) string {
 	if bytes <= 0 {
 		return "No limit"
@@ -181,3 +327,15 @@ func quotaObjectDisplay(count int64) string {
 	}
 	return strconv.FormatInt(count, 10)
 }
+
+func formatInt64(v int64) string {
+	return strconv.FormatInt(v, 10)
+}
+
+func lifecycleJSON(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	return string(raw)
+}
+
