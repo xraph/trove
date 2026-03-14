@@ -9,8 +9,6 @@ import (
 	dashboard "github.com/xraph/forge/extensions/dashboard"
 	"github.com/xraph/forge/extensions/dashboard/contributor"
 	"github.com/xraph/grove"
-	"github.com/xraph/grove/drivers/pgdriver"
-	"github.com/xraph/grove/migrate"
 	"github.com/xraph/vessel"
 
 	"github.com/xraph/trove"
@@ -18,8 +16,10 @@ import (
 	"github.com/xraph/trove/driver"
 	"github.com/xraph/trove/drivers/memdriver"
 	trovedash "github.com/xraph/trove/extension/dashboard"
-	extmigrate "github.com/xraph/trove/extension/migrate"
 	"github.com/xraph/trove/extension/store"
+	mongostore "github.com/xraph/trove/extension/store/mongo"
+	pgstore "github.com/xraph/trove/extension/store/postgres"
+	sqlitestore "github.com/xraph/trove/extension/store/sqlite"
 	"github.com/xraph/trove/middleware/compress"
 )
 
@@ -46,7 +46,7 @@ type Extension struct {
 
 	config    Config
 	t         *trove.Trove
-	store     *store.Store
+	store     store.Store
 	troveOpts []trove.Option
 	useGrove  bool
 }
@@ -92,12 +92,19 @@ func (e *Extension) Init(fapp forge.App) error {
 		if err != nil {
 			return fmt.Errorf("trove: resolve grove db: %w", err)
 		}
-		e.store = store.New(groveDB)
+		s, err := e.buildStoreFromGroveDB(groveDB)
+		if err != nil {
+			return err
+		}
+		e.store = s
 	}
 	if e.store == nil {
 		if db, err := vessel.Inject[*grove.DB](fapp.Container()); err == nil {
-			// Auto-discover default grove.DB from container (matches authsome/cortex pattern).
-			e.store = store.New(db)
+			s, err := e.buildStoreFromGroveDB(db)
+			if err != nil {
+				return err
+			}
+			e.store = s
 			e.Logger().Info("trove: auto-discovered grove.DB from container",
 				forge.F("driver", db.Driver().Name()),
 			)
@@ -106,7 +113,7 @@ func (e *Extension) Init(fapp forge.App) error {
 
 	// Run migrations.
 	if e.store != nil && !e.config.DisableMigrate {
-		if err := e.runMigrations(context.Background()); err != nil {
+		if err := e.store.Migrate(context.Background()); err != nil {
 			return fmt.Errorf("trove: migrations: %w", err)
 		}
 	}
@@ -151,7 +158,7 @@ func (e *Extension) Trove() *trove.Trove {
 }
 
 // Store returns the underlying store.
-func (e *Extension) Store() *store.Store {
+func (e *Extension) Store() store.Store {
 	return e.store
 }
 
@@ -295,34 +302,20 @@ func (e *Extension) resolveGroveDB(fapp forge.App) (*grove.DB, error) {
 	return db, nil
 }
 
-func (e *Extension) runMigrations(ctx context.Context) error {
-	if e.store == nil || e.store.DB() == nil {
-		return nil
+// buildStoreFromGroveDB creates the appropriate store backend based on the
+// Grove driver type (pg, sqlite, mongo).
+func (e *Extension) buildStoreFromGroveDB(db *grove.DB) (store.Store, error) {
+	driverName := db.Driver().Name()
+	switch driverName {
+	case "pg":
+		return pgstore.New(db), nil
+	case "sqlite":
+		return sqlitestore.New(db), nil
+	case "mongo":
+		return mongostore.New(db), nil
+	default:
+		return nil, fmt.Errorf("trove: unsupported grove driver %q", driverName)
 	}
-
-	db := e.store.DB()
-	pg, ok := tryUnwrapPgFromDB(db)
-	if !ok {
-		return nil // skip migrations for non-PG drivers
-	}
-
-	executor, err := migrate.NewExecutorFor(pg)
-	if err != nil {
-		return fmt.Errorf("create executor: %w", err)
-	}
-
-	orch := migrate.NewOrchestrator(executor, extmigrate.Migrations)
-	if _, err := orch.Migrate(ctx); err != nil {
-		return fmt.Errorf("run migrations: %w", err)
-	}
-
-	return nil
-}
-
-func tryUnwrapPgFromDB(db *grove.DB) (*pgdriver.PgDB, bool) {
-	defer func() { recover() }()
-	pg := pgdriver.Unwrap(db)
-	return pg, pg != nil
 }
 
 func (e *Extension) buildTrove() error {

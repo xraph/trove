@@ -29,7 +29,7 @@ var _ contributor.LocalContributor = (*Contributor)(nil)
 // components and ForgeUI.
 type Contributor struct {
 	manifest *contributor.Manifest
-	store    *store.Store
+	store    store.Store
 	trove    *trove.Trove
 	config   ContributorConfig
 }
@@ -46,7 +46,7 @@ type ContributorConfig struct {
 }
 
 // New creates a new trove dashboard contributor.
-func New(manifest *contributor.Manifest, s *store.Store, t *trove.Trove, cfg ContributorConfig) *Contributor {
+func New(manifest *contributor.Manifest, s store.Store, t *trove.Trove, cfg ContributorConfig) *Contributor {
 	return &Contributor{
 		manifest: manifest,
 		store:    s,

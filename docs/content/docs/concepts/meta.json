@@ -1,4 +1,13 @@
 {
   "title": "Core Concepts",
-  "pages": ["driver-system", "multi-backend-routing", "middleware-pipeline", "capabilities", "checksums", "type-ids", "errors", "multi-tenancy"]
+  "pages": [
+    "driver-system",
+    "multi-backend-routing",
+    "middleware-pipeline",
+    "capabilities",
+    "checksums",
+    "type-ids",
+    "errors",
+    "multi-tenancy"
+  ]
 }

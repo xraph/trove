@@ -155,7 +155,7 @@ func (d *LocalDriver) Put(_ context.Context, bucket, key string, r io.Reader, op
 	}
 
 	// Atomic rename.
-	if err := os.Rename(tmpPath, objPath); err != nil { //nolint:gosec // paths are derived from controlled rootDir
+	if err := os.Rename(tmpPath, objPath); err != nil {
 		return nil, fmt.Errorf("localdriver: rename: %w", err)
 	}
 	success = true

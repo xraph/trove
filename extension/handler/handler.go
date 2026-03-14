@@ -14,13 +14,13 @@ import (
 // Handler provides HTTP handlers for Trove operations.
 type Handler struct {
 	trove  *trove.Trove
-	store  *store.Store
+	store  store.Store
 	logger log.Logger
 	mux    *http.ServeMux
 }
 
 // New creates a new Handler.
-func New(t *trove.Trove, s *store.Store, logger log.Logger) *Handler {
+func New(t *trove.Trove, s store.Store, logger log.Logger) *Handler {
 	if logger == nil {
 		logger = log.NewNoopLogger()
 	}

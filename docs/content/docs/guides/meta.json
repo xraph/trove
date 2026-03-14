@@ -1,4 +1,10 @@
 {
   "title": "Guides",
-  "pages": ["basic-storage", "multi-backend-setup", "middleware-setup", "file-browser", "streaming-uploads"]
+  "pages": [
+    "basic-storage",
+    "multi-backend-setup",
+    "middleware-setup",
+    "file-browser",
+    "streaming-uploads"
+  ]
 }

@@ -9,7 +9,7 @@ import (
 type ExtOption func(*Extension)
 
 // WithStore provides a pre-built store (skips Grove DB resolution).
-func WithStore(s *store.Store) ExtOption {
+func WithStore(s store.Store) ExtOption {
 	return func(e *Extension) {
 		e.store = s
 	}

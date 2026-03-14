@@ -4,17 +4,20 @@ go 1.25.7
 
 require (
 	github.com/a-h/templ v0.3.1001
-	github.com/xraph/chronicle v1.3.0
-	github.com/xraph/dispatch v1.3.0
-	github.com/xraph/forge v1.3.0
+	github.com/xraph/chronicle v1.3.1
+	github.com/xraph/dispatch v1.3.1
+	github.com/xraph/forge v1.3.1
 	github.com/xraph/forgeui v1.3.0
 	github.com/xraph/go-utils v1.0.0
-	github.com/xraph/grove v1.3.0
-	github.com/xraph/grove/drivers/pgdriver v1.3.0
+	github.com/xraph/grove v1.3.1
+	github.com/xraph/grove/drivers/mongodriver v1.3.1
+	github.com/xraph/grove/drivers/pgdriver v1.3.1
+	github.com/xraph/grove/drivers/sqlitedriver v1.3.1
 	github.com/xraph/trove v0.0.0
-	github.com/xraph/vault v1.3.0
+	github.com/xraph/vault v1.3.1
 	github.com/xraph/vessel v1.0.0
-	github.com/xraph/warden v1.3.0
+	github.com/xraph/warden v1.3.1
+	go.mongodb.org/mongo-driver/v2 v2.5.0
 )
 
 require (
@@ -26,6 +29,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dunglas/httpsfv v1.1.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
@@ -72,6 +76,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
@@ -79,11 +84,16 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/quic-go/webtransport-go v0.10.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/uptrace/bunrouter v1.0.23 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
+	github.com/xdg-go/scram v1.2.0 // indirect
+	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xraph/confy v0.1.0 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -121,6 +131,10 @@ require (
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 // indirect
 	k8s.io/utils v0.0.0-20251002143259-bc988d571ff4 // indirect
+	modernc.org/libc v1.68.0 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.11.0 // indirect
+	modernc.org/sqlite v1.46.1 // indirect
 	nhooyr.io/websocket v1.8.17 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect

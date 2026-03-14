@@ -1,4 +1,11 @@
 {
   "title": "Integration",
-  "pages": ["forge-extension", "configuration", "rest-api", "grove-store", "ecosystem", "dashboard"]
+  "pages": [
+    "forge-extension",
+    "configuration",
+    "rest-api",
+    "grove-store",
+    "ecosystem",
+    "dashboard"
+  ]
 }

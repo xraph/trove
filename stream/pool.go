@@ -71,7 +71,7 @@ func NewPool(name string, cfg PoolConfig) *Pool {
 		cfg.ChunkSize = DefaultPoolConfig().ChunkSize
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // cancel is stored in Pool.cancel and called in Pool.Close()
 
 	return &Pool{
 		ID:        id.NewPoolID(),
