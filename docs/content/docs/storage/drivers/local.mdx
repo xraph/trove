@@ -37,11 +37,36 @@ t, err := trove.Open(drv)
 
 ## DSN Format
 
+The local driver supports two URI schemes:
+
 ```
-file:///absolute/path/to/root
+file:///absolute/path/to/root          # Absolute path only
+local://./relative/path                # Relative path (resolved from cwd)
+local:///absolute/path                 # Absolute path
 ```
 
-The path after `file://` becomes the root directory. All buckets and objects are stored under this path.
+The `file://` scheme requires an absolute path. The `local://` scheme supports both relative and absolute paths. Relative paths are resolved to absolute from the current working directory.
+
+### Examples
+
+```yaml
+# Absolute path
+storage_driver: "file:///var/data/trove"
+
+# Relative path (resolved from cwd)
+storage_driver: "local://./storages/local"
+
+# Absolute path with local:// scheme
+storage_driver: "local:///data/archive"
+```
+
+## Driver Registry
+
+The local driver registers itself in the global driver registry under both `file` and `local` schemes. This enables DSN-based driver resolution in multi-store mode:
+
+```go
+import _ "github.com/xraph/trove/drivers/localdriver" // registers "file" and "local"
+```
 
 ## Storage Layout
 

@@ -30,6 +30,22 @@ defer t.Close(ctx)
 
 No DSN or `Open()` call is required -- the memory driver is ready to use immediately after `New()`.
 
+## DSN Format
+
+When used via DSN-based resolution (e.g., in multi-store configuration), the memory driver uses the `mem://` scheme:
+
+```yaml
+storage_driver: "mem://"
+```
+
+## Driver Registry
+
+The memory driver registers itself in the global driver registry under the `mem` scheme. This enables DSN-based driver resolution in multi-store mode:
+
+```go
+import _ "github.com/xraph/trove/drivers/memdriver" // registers "mem"
+```
+
 ## Features
 
 - **Thread-safe** -- All operations are protected by `sync.RWMutex`
@@ -44,6 +60,7 @@ No DSN or `Open()` call is required -- the memory driver is ready to use immedia
 - **Integration tests** -- Verify routing and multi-backend logic without real backends
 - **Development** -- Quick prototyping without setting up storage infrastructure
 - **Conformance testing** -- Reference implementation for the driver interface
+- **Multi-store scratch space** -- Ephemeral store alongside persistent stores in multi-store mode
 
 ## Example: Test Setup
 

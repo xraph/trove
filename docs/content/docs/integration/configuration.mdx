@@ -32,6 +32,58 @@ trove:
 
 The namespaced `extensions.trove` key is checked first. If not found, the extension falls back to the top-level `trove` key.
 
+## Multi-Store Configuration
+
+Trove supports multiple named file stores, each with its own storage driver, metadata database, and settings. This mirrors how Grove supports multiple named databases.
+
+```yaml
+extensions:
+  trove:
+    base_path: "/trove/v1"
+    stores:
+      - name: primary
+        storage_driver: "s3://us-east-1/my-bucket"
+        grove_database: "primary"
+        default_bucket: "uploads"
+        enable_compression: true
+      - name: archive
+        storage_driver: "file:///data/archive"
+        grove_database: "archive-db"
+        default_bucket: "archive"
+      - name: temp
+        storage_driver: "mem://"
+        default_bucket: "scratch"
+    default: primary
+```
+
+### Store Entry Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Unique identifier (required) |
+| `storage_driver` | string | DSN for the storage backend (required) |
+| `grove_database` | string | Named Grove DB for metadata |
+| `default_bucket` | string | Default bucket name |
+| `enable_cas` | bool | Enable content-addressable storage |
+| `enable_encryption` | bool | Auto-configure encryption middleware |
+| `enable_compression` | bool | Auto-configure compression middleware |
+
+### Default Store
+
+The `default` field sets which store is used for unnamed DI injection (`vessel.Inject[*trove.Trove]`). If omitted, the first entry in `stores` becomes the default.
+
+### Validation
+
+The configuration is validated during extension registration:
+
+- Each store must have a `name` and `storage_driver`
+- Store names must be unique
+- If `default` is set, it must reference an existing store name
+
+### Backward Compatibility
+
+Single-store configuration (without the `stores` array) continues to work as before. The extension automatically detects whether to use single-store or multi-store mode based on whether `stores` is present.
+
 ## Programmatic Options
 
 Options set via `troveext` functions are merged with YAML configuration:
@@ -50,7 +102,7 @@ troveext.New(
 )
 ```
 
-### Available Option Functions
+### Single-Store Options
 
 | Function | Description |
 |----------|-------------|
@@ -59,6 +111,19 @@ troveext.New(
 | `troveext.WithDisableRoutes()` | Skip HTTP route registration |
 | `troveext.WithDisableMigrate()` | Skip automatic database migration |
 | `troveext.WithGroveDatabase(name)` | Use a named Grove DB from DI for metadata |
+| `troveext.WithTroveOption(opt)` | Add a `trove.Option` applied during initialization |
+| `troveext.WithStore(s)` | Provide a pre-built metadata store |
+
+### Multi-Store Options
+
+| Function | Description |
+|----------|-------------|
+| `troveext.WithFileStore(name, drv)` | Add a named store with a pre-configured driver |
+| `troveext.WithFileStoreDSN(name, dsn)` | Add a named store using a DSN string |
+| `troveext.WithDefaultFileStore(name)` | Set which named store is the default |
+| `troveext.WithTroveOptionFor(name, opt)` | Add a `trove.Option` scoped to a named store |
+
+Programmatic store entries take precedence over YAML entries with the same name.
 
 ## Config Merge Behavior
 
@@ -72,22 +137,40 @@ YAML values take precedence over programmatic values for the same field. Program
 
 ## Driver DSN Reference
 
-The `driver_dsn` field determines which storage backend Trove uses. Each driver is identified by a URI scheme:
+The `driver_dsn` (or `storage_driver` in multi-store entries) field determines which storage backend Trove uses. Each driver is identified by a URI scheme:
 
 | Driver | DSN Format | Example |
 |--------|-----------|---------|
 | Local filesystem | `file:///path` | `file:///data/storage` |
+| Local filesystem | `local://./relative/path` | `local://./storages/local` |
 | In-memory | `mem://` | `mem://` |
 | Amazon S3 | `s3://bucket?region=...&endpoint=...` | `s3://my-bucket?region=us-east-1` |
 | Google Cloud Storage | `gs://bucket` | `gs://my-bucket` |
 | Azure Blob Storage | `azblob://container` | `azblob://my-container` |
 | SFTP | `sftp://user@host/path` | `sftp://user@storage.example.com/data` |
 
+The local driver accepts both `file://` (absolute paths) and `local://` (relative paths) schemes. Relative paths are resolved from the current working directory.
+
 S3-compatible stores (MinIO, DigitalOcean Spaces, Backblaze B2) use the `s3://` scheme with the `endpoint` query parameter:
 
 ```yaml
 driver_dsn: "s3://my-bucket?region=us-east-1&endpoint=https://minio.local:9000"
 ```
+
+### Driver Registry
+
+Storage drivers register themselves in a global registry via their `init()` function. When Trove resolves a DSN, it extracts the scheme and looks up the corresponding driver factory. The following drivers are auto-registered when imported:
+
+| Package | Registered Scheme(s) |
+|---------|---------------------|
+| `drivers/localdriver` | `file`, `local` |
+| `drivers/memdriver` | `mem` |
+| `drivers/s3driver` | `s3` |
+| `drivers/gcsdriver` | `gcs` |
+| `drivers/azuredriver` | `azure` |
+| `drivers/sftpdriver` | `sftp` |
+
+In multi-store mode, ensure you import the driver packages your stores need so their `init()` functions register the factories.
 
 ## Grove Database
 
@@ -97,6 +180,8 @@ The `grove_database` field tells Trove which Grove database instance to use for 
 - If omitted or set to `"default"`, Trove uses the **default** Grove DB: `vessel.Inject[*grove.DB](container)`
 
 This lets you run Trove metadata on a dedicated database separate from your application data by pointing `grove_database` at a named Grove database entry.
+
+In multi-store mode, each store can reference a different Grove database. This keeps metadata isolated between stores.
 
 ## Environment Variables
 

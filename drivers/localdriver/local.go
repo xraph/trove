@@ -31,6 +31,11 @@ import (
 	"github.com/xraph/trove/driver"
 )
 
+func init() {
+	driver.Register("file", func() driver.Driver { return New() })
+	driver.Register("local", func() driver.Driver { return New() })
+}
+
 // Compile-time interface check.
 var _ driver.Driver = (*LocalDriver)(nil)
 
@@ -58,20 +63,42 @@ func New() *LocalDriver {
 func (d *LocalDriver) Name() string { return "local" }
 
 // Open initializes the driver with the given DSN.
-// DSN format: file:///path/to/root
+//
+// Supported DSN formats:
+//
+//	file:///path/to/root          – absolute path
+//	local://./relative/path       – relative path (resolved from cwd)
+//	local:///absolute/path        – absolute path
 func (d *LocalDriver) Open(_ context.Context, dsn string, _ ...driver.Option) error {
 	cfg, err := driver.ParseDSN(dsn)
 	if err != nil {
 		return fmt.Errorf("localdriver: %w", err)
 	}
 
-	if cfg.Scheme != "file" {
-		return fmt.Errorf("localdriver: expected scheme \"file\", got %q", cfg.Scheme)
+	if cfg.Scheme != "file" && cfg.Scheme != "local" {
+		return fmt.Errorf("localdriver: expected scheme \"file\" or \"local\", got %q", cfg.Scheme)
 	}
 
-	rootDir := cfg.Path
+	// For "local" scheme, reconstruct the path from host+path to support
+	// relative paths like "local://./storages/local" where URL parsing
+	// splits "." into host and "/storages/local" into path.
+	var rootDir string
+	if cfg.Scheme == "local" && cfg.Host != "" {
+		rootDir = cfg.Host + cfg.Path
+	} else {
+		rootDir = cfg.Path
+	}
 	if rootDir == "" {
 		return fmt.Errorf("localdriver: DSN path is empty")
+	}
+
+	// Resolve relative paths to absolute.
+	if !filepath.IsAbs(rootDir) {
+		abs, absErr := filepath.Abs(rootDir)
+		if absErr != nil {
+			return fmt.Errorf("localdriver: resolve absolute path: %w", absErr)
+		}
+		rootDir = abs
 	}
 
 	// Ensure root directory exists.

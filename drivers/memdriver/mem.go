@@ -22,6 +22,10 @@ import (
 	"github.com/xraph/trove/driver"
 )
 
+func init() {
+	driver.Register("mem", func() driver.Driver { return New() })
+}
+
 // Compile-time interface check.
 var _ driver.Driver = (*MemDriver)(nil)
 
