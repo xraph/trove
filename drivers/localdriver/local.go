@@ -39,6 +39,27 @@ func init() {
 // Compile-time interface check.
 var _ driver.Driver = (*LocalDriver)(nil)
 
+// safeJoin joins rootDir with the given parts and verifies the resulting
+// path is contained within rootDir. It prevents path traversal via taint
+// inputs such as bucket/key containing "..".
+func safeJoin(rootDir string, parts ...string) (string, error) {
+	for _, p := range parts {
+		if p == "" || strings.Contains(p, "\x00") {
+			return "", fmt.Errorf("localdriver: invalid path segment %q", p)
+		}
+	}
+	joined := filepath.Join(append([]string{rootDir}, parts...)...)
+	cleanRoot := filepath.Clean(rootDir)
+	rel, err := filepath.Rel(cleanRoot, joined)
+	if err != nil {
+		return "", fmt.Errorf("localdriver: resolve path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("localdriver: path escapes root: %s", rel)
+	}
+	return joined, nil
+}
+
 // metadata is the sidecar JSON structure stored alongside objects.
 type metadata struct {
 	ContentType  string            `json:"content_type"`
@@ -149,12 +170,15 @@ func (d *LocalDriver) Put(_ context.Context, bucket, key string, r io.Reader, op
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	objPath := filepath.Join(rootDir, bucket, key)
+	objPath, err := safeJoin(rootDir, bucket, key)
+	if err != nil {
+		return nil, err
+	}
 	objDir := filepath.Dir(objPath)
 
 	// Ensure parent directory exists.
-	if err := os.MkdirAll(objDir, 0o750); err != nil {
-		return nil, fmt.Errorf("localdriver: create dir: %w", err)
+	if mkErr := os.MkdirAll(objDir, 0o750); mkErr != nil {
+		return nil, fmt.Errorf("localdriver: create dir: %w", mkErr)
 	}
 
 	// Write to a temp file first, then atomically rename.
@@ -177,13 +201,13 @@ func (d *LocalDriver) Put(_ context.Context, bucket, key string, r io.Reader, op
 		tmpFile.Close()
 		return nil, fmt.Errorf("localdriver: write data: %w", err)
 	}
-	if err := tmpFile.Close(); err != nil {
-		return nil, fmt.Errorf("localdriver: close temp file: %w", err)
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		return nil, fmt.Errorf("localdriver: close temp file: %w", closeErr)
 	}
 
-	// Atomic rename.
-	if err := os.Rename(tmpPath, objPath); err != nil {
-		return nil, fmt.Errorf("localdriver: rename: %w", err)
+	// Atomic rename. objPath was validated by safeJoin above.
+	if renameErr := os.Rename(tmpPath, objPath); renameErr != nil { //nolint:gosec // G703: objPath is validated by safeJoin to stay within rootDir
+		return nil, fmt.Errorf("localdriver: rename: %w", renameErr)
 	}
 	success = true
 
