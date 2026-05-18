@@ -206,7 +206,7 @@ func (d *LocalDriver) Put(_ context.Context, bucket, key string, r io.Reader, op
 	}
 
 	// Atomic rename. objPath was validated by safeJoin above.
-	if renameErr := os.Rename(tmpPath, objPath); renameErr != nil { //nolint:gosec // G703: objPath is validated by safeJoin to stay within rootDir
+	if renameErr := os.Rename(tmpPath, objPath); renameErr != nil {
 		return nil, fmt.Errorf("localdriver: rename: %w", renameErr)
 	}
 	success = true
