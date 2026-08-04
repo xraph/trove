@@ -192,20 +192,23 @@ func (d *LocalDriver) Put(_ context.Context, bucket, key string, r io.Reader, op
 	success := false
 	defer func() {
 		if !success {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
 	n, err := io.Copy(tmpFile, r)
 	if err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return nil, fmt.Errorf("localdriver: write data: %w", err)
 	}
 	if closeErr := tmpFile.Close(); closeErr != nil {
 		return nil, fmt.Errorf("localdriver: close temp file: %w", closeErr)
 	}
 
-	// Atomic rename. objPath was validated by safeJoin above.
+	// Atomic rename. objPath came from safeJoin, which rejects any path
+	// resolving outside rootDir; gosec's taint analysis does not recognise it
+	// as a sanitizer.
+	// #nosec G703 -- path validated by safeJoin at the top of this function.
 	if renameErr := os.Rename(tmpPath, objPath); renameErr != nil {
 		return nil, fmt.Errorf("localdriver: rename: %w", renameErr)
 	}
@@ -253,8 +256,12 @@ func (d *LocalDriver) Get(_ context.Context, bucket, key string, _ ...driver.Get
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	objPath := filepath.Join(rootDir, bucket, key)
+	objPath, err := safeJoin(rootDir, bucket, key)
+	if err != nil {
+		return nil, err
+	}
 
+	// #nosec G304 -- path produced by safeJoin, which rejects anything resolving outside rootDir.
 	f, err := os.Open(objPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -265,7 +272,7 @@ func (d *LocalDriver) Get(_ context.Context, bucket, key string, _ ...driver.Get
 
 	stat, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("localdriver: stat file: %w", err)
 	}
 
@@ -297,7 +304,10 @@ func (d *LocalDriver) Delete(_ context.Context, bucket, key string, _ ...driver.
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	objPath := filepath.Join(rootDir, bucket, key)
+	objPath, err := safeJoin(rootDir, bucket, key)
+	if err != nil {
+		return err
+	}
 	metaPath := objPath + ".meta.json"
 
 	// Remove data file (idempotent).
@@ -306,7 +316,7 @@ func (d *LocalDriver) Delete(_ context.Context, bucket, key string, _ ...driver.
 	}
 
 	// Remove sidecar metadata.
-	os.Remove(metaPath)
+	_ = os.Remove(metaPath)
 
 	return nil
 }
@@ -321,7 +331,10 @@ func (d *LocalDriver) Head(_ context.Context, bucket, key string) (*driver.Objec
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	objPath := filepath.Join(rootDir, bucket, key)
+	objPath, err := safeJoin(rootDir, bucket, key)
+	if err != nil {
+		return nil, err
+	}
 
 	stat, err := os.Stat(objPath)
 	if err != nil {
@@ -356,13 +369,16 @@ func (d *LocalDriver) List(_ context.Context, bucket string, opts ...driver.List
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	bucketDir := filepath.Join(rootDir, bucket)
-	if _, err := os.Stat(bucketDir); os.IsNotExist(err) {
+	bucketDir, err := safeJoin(rootDir, bucket)
+	if err != nil {
+		return nil, err
+	}
+	if _, statErr := os.Stat(bucketDir); os.IsNotExist(statErr) {
 		return nil, fmt.Errorf("localdriver: bucket %q not found", bucket)
 	}
 
 	var keys []string
-	err := filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -443,10 +459,17 @@ func (d *LocalDriver) Copy(_ context.Context, srcBucket, srcKey, dstBucket, dstK
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	srcPath := filepath.Join(rootDir, srcBucket, srcKey)
-	dstPath := filepath.Join(rootDir, dstBucket, dstKey)
+	srcPath, err := safeJoin(rootDir, srcBucket, srcKey)
+	if err != nil {
+		return nil, err
+	}
+	dstPath, err := safeJoin(rootDir, dstBucket, dstKey)
+	if err != nil {
+		return nil, err
+	}
 
 	// Read source file.
+	// #nosec G304 -- path produced by safeJoin, which rejects anything resolving outside rootDir.
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -463,6 +486,7 @@ func (d *LocalDriver) Copy(_ context.Context, srcBucket, srcKey, dstBucket, dstK
 	}
 
 	// Write destination file.
+	// #nosec G304 -- path produced by safeJoin, which rejects anything resolving outside rootDir.
 	dstFile, err := os.Create(dstPath)
 	if err != nil {
 		return nil, fmt.Errorf("localdriver: create dst: %w", err)
@@ -470,10 +494,10 @@ func (d *LocalDriver) Copy(_ context.Context, srcBucket, srcKey, dstBucket, dstK
 
 	n, err := io.Copy(dstFile, srcFile)
 	if err != nil {
-		dstFile.Close()
+		_ = dstFile.Close()
 		return nil, fmt.Errorf("localdriver: copy data: %w", err)
 	}
-	dstFile.Close()
+	_ = dstFile.Close()
 
 	// Copy or override metadata.
 	srcMeta := d.readMeta(srcPath)
@@ -509,7 +533,10 @@ func (d *LocalDriver) CreateBucket(_ context.Context, name string, _ ...driver.B
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	bucketDir := filepath.Join(rootDir, name)
+	bucketDir, err := safeJoin(rootDir, name)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(bucketDir); err == nil {
 		return fmt.Errorf("localdriver: bucket %q already exists", name)
 	}
@@ -531,7 +558,10 @@ func (d *LocalDriver) DeleteBucket(_ context.Context, name string) error {
 	rootDir := d.rootDir
 	d.mu.RUnlock()
 
-	bucketDir := filepath.Join(rootDir, name)
+	bucketDir, err := safeJoin(rootDir, name)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(bucketDir); os.IsNotExist(err) {
 		return fmt.Errorf("localdriver: bucket %q not found", name)
 	}
@@ -596,6 +626,7 @@ func (d *LocalDriver) writeMeta(objPath string, meta metadata) error {
 
 func (d *LocalDriver) readMeta(objPath string) metadata {
 	metaPath := objPath + ".meta.json"
+	// #nosec G304 -- path produced by safeJoin, which rejects anything resolving outside rootDir.
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
 		// No sidecar — infer content type from extension.

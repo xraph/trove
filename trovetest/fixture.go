@@ -24,9 +24,9 @@ func TestObject(key string, data []byte) (string, io.Reader) {
 // RandomData generates random bytes of the specified size.
 func RandomData(size int) []byte {
 	data := make([]byte, size)
-	//nolint:gosec // math/rand is fine for test data
+	// #nosec G404 -- fixed seed on purpose: test fixtures must be reproducible.
 	r := rand.New(rand.NewSource(42))
-	r.Read(data)
+	_, _ = r.Read(data)
 	return data
 }
 

@@ -468,7 +468,7 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 						return
 					}
 					got, err := io.ReadAll(reader)
-					reader.Close()
+					_ = reader.Close()
 					if err != nil {
 						errCh <- err
 						return

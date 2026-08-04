@@ -277,7 +277,7 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 	}
 
 	// Delete the key itself.
-	f.store.Delete(ctx, f.bucket, name) //nolint:errcheck // best effort
+	_ = f.store.Delete(ctx, f.bucket, name) //nolint:errcheck // best effort
 
 	// Delete all children.
 	iter, err := f.store.List(ctx, f.bucket, driver.WithPrefix(prefix))
