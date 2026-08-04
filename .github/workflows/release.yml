@@ -43,7 +43,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          # One toolchain serves the whole job, which builds the root module
+          # and extension/. extension depends on forge and requires 1.26.0
+          # while the root, a leaf, still declares 1.25.7 — so take the higher.
+          go-version-file: extension/go.mod
           cache: true
           cache-dependency-path: go.sum
 
