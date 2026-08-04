@@ -82,7 +82,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: extension/go.mod
           cache: true
           cache-dependency-path: extension/go.sum
 
@@ -113,7 +113,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: bench/go.mod
           cache: true
           cache-dependency-path: bench/go.sum
 
