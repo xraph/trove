@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -22,7 +21,7 @@ func (h *Handler) putObject(w http.ResponseWriter, r *http.Request) {
 
 	info, err := h.trove.Put(r.Context(), bucket, key, r.Body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpError(w, r, "put_object", err)
 		return
 	}
 
@@ -35,7 +34,9 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request) {
 
 	obj, err := h.trove.Get(r.Context(), bucket, key)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		// Previously a flat 404 for every failure, which reported a rejected
+		// key and a backend outage identically.
+		h.writeOpError(w, r, "get_object", err)
 		return
 	}
 	defer obj.Close()
@@ -63,7 +64,7 @@ func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if err := h.trove.Delete(r.Context(), bucket, key); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpError(w, r, "delete_object", err)
 		return
 	}
 
@@ -76,7 +77,9 @@ func (h *Handler) headObject(w http.ResponseWriter, r *http.Request) {
 
 	info, err := h.trove.Head(r.Context(), bucket, key)
 	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
+		// A HEAD response carries no body, so the classification only picks
+		// the status — but the error is still logged rather than dropped.
+		h.writeOpStatus(w, r, "head_object", err)
 		return
 	}
 
@@ -103,14 +106,14 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request) {
 
 	iter, err := h.trove.List(r.Context(), bucket, opts...)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpError(w, r, "list_objects", err)
 		return
 	}
 	defer iter.Close()
 
 	objects, err := iter.All(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("list objects: %v", err))
+		h.writeOpError(w, r, "list_objects", err)
 		return
 	}
 

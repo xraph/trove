@@ -30,7 +30,7 @@ func (h *Handler) createBucket(w http.ResponseWriter, r *http.Request) {
 
 	// Create in storage driver.
 	if err := h.trove.CreateBucket(r.Context(), req.Name); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpError(w, r, "create_bucket", err)
 		return
 	}
 
@@ -55,7 +55,7 @@ func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
 	if h.store != nil {
 		buckets, err := h.store.ListBuckets(r.Context(), r.URL.Query().Get("tenant"))
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			h.writeOpError(w, r, "list_buckets", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, buckets)
@@ -65,7 +65,7 @@ func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
 	// Fallback to driver listing.
 	buckets, err := h.trove.ListBuckets(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpError(w, r, "list_buckets", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, buckets)
@@ -91,7 +91,7 @@ func (h *Handler) deleteBucket(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("bucket")
 
 	if err := h.trove.DeleteBucket(r.Context(), name); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpError(w, r, "delete_bucket", err)
 		return
 	}
 

@@ -43,6 +43,18 @@ var (
 	// ErrQuotaExceeded reports that a storage quota or rate limit was
 	// exceeded. Unlike ErrPermissionDenied, retrying later may succeed.
 	ErrQuotaExceeded error = errors.New("trove: quota exceeded")
+
+	// ErrInvalidPath reports that a bucket name or object key is not
+	// addressable — it is empty, contains a NUL byte, is rooted, or resolves
+	// outside the container it was addressed to. Drivers that map keys onto a
+	// hierarchical namespace wrap it from their containment guard.
+	//
+	// It is deliberately outside the not-found family. The resource was never
+	// addressable, so nothing was looked up: a caller must be able to answer
+	// "the request is malformed" (HTTP 400) rather than "it isn't there"
+	// (404), which would both misdescribe the failure and let a client use
+	// rejected keys to probe what exists.
+	ErrInvalidPath error = errors.New("trove: invalid path")
 )
 
 // Permanent reports whether err describes a condition that retrying cannot
@@ -57,6 +69,8 @@ var (
 //     backend's access policy do.
 //   - ErrBucketExists — the bucket will not stop existing because you asked
 //     again.
+//   - ErrInvalidPath — a malformed key does not become well-formed on the
+//     next attempt.
 //
 // Not permanent:
 //
@@ -86,7 +100,8 @@ func Permanent(err error) bool {
 		return false
 	case errors.Is(err, ErrNotFound),
 		errors.Is(err, ErrPermissionDenied),
-		errors.Is(err, ErrBucketExists):
+		errors.Is(err, ErrBucketExists),
+		errors.Is(err, ErrInvalidPath):
 		return true
 	default:
 		return false
