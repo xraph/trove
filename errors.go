@@ -36,6 +36,13 @@ var (
 	// ErrQuotaExceeded is returned when a storage quota or rate limit is
 	// exceeded. Retrying later may succeed.
 	ErrQuotaExceeded = driver.ErrQuotaExceeded
+
+	// ErrInvalidPath is returned when a bucket name or object key is not
+	// addressable — empty, containing a NUL byte, rooted, or resolving outside
+	// the container it was addressed to. It does not unwrap to ErrNotFound:
+	// nothing was looked up, so the request is malformed rather than the
+	// resource missing, and an HTTP caller should answer 400 rather than 404.
+	ErrInvalidPath = driver.ErrInvalidPath
 )
 
 // Permanent reports whether err describes a condition that retrying cannot

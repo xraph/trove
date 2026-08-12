@@ -48,7 +48,28 @@ Errors related to invalid input:
 |-------|-------------|
 | `ErrKeyEmpty` | Object key is empty (required field) |
 | `ErrBucketEmpty` | Bucket name is empty (required field) |
+| `ErrInvalidPath` | Bucket name or key is not addressable |
 | `ErrInvalidDSN` | DSN string cannot be parsed |
+
+`ErrInvalidPath` comes from drivers that map keys onto a hierarchical
+namespace -- `local` and `sftp` -- when a bucket or key is empty, contains a
+NUL byte, is rooted, or resolves outside the container it was addressed to.
+Their containment guards refuse it before it reaches the filesystem.
+
+It is deliberately **not** part of the not-found family:
+
+```go
+errors.Is(err, trove.ErrInvalidPath) // true
+errors.Is(err, trove.ErrNotFound)    // false -- nothing was looked up
+```
+
+The key was never addressable, so no lookup happened. An HTTP surface must
+answer `400` rather than `404`, which would both misdescribe the failure and
+let a client use rejected keys to probe which objects exist.
+
+Object-store drivers (`s3`, `gcs`, `azure`) do not return it. Their keys are
+opaque strings, so `../` is an ordinary character sequence rather than a
+traversal, and there is nothing to reject.
 
 ## Driver Errors
 
@@ -131,6 +152,7 @@ When Trove is used as an HTTP API, sentinel errors map to standard HTTP status c
 | `ErrBucketExists` | Conflict | 409 |
 | `ErrKeyEmpty` | Bad Request | 400 |
 | `ErrBucketEmpty` | Bad Request | 400 |
+| `ErrInvalidPath` | Bad Request | 400 |
 | `ErrInvalidDSN` | Bad Request | 400 |
 | `ErrDriverClosed` | Service Unavailable | 503 |
 | `ErrNilDriver` | Internal Server Error | 500 |
@@ -196,6 +218,7 @@ What counts as permanent:
 | `ErrNotFound`, `ErrObjectNotFound`, `ErrBucketNotFound` | `true` | The resource will not reappear on its own |
 | `ErrPermissionDenied` | `true` | Nothing changes until credentials or policy do |
 | `ErrBucketExists` | `true` | The bucket will not stop existing because you asked again |
+| `ErrInvalidPath` | `true` | A malformed key does not become well-formed on the next attempt |
 | `ErrQuotaExceeded` | `false` | Refused now, may be granted later |
 | Anything unclassified | `false` | Assumed transient |
 
@@ -233,3 +256,37 @@ and `driver.ErrObjectNotFound` are the same value.
 
 The conformance suite in `trovetest` asserts this contract, so a driver that
 returns an unclassified not-found fails `RunDriverSuite`.
+
+`ErrInvalidPath` is the exception: it is required only of drivers whose keys
+address a real hierarchical namespace, so the suite does not demand it. A
+driver whose keys are opaque strings has nothing to reject.
+
+### Classified Messages Are Published
+
+Classifying an error is also a statement about its message. Trove's HTTP
+extension returns the message of a **classified** error in the response body,
+and replaces the message of an unclassified one with a constant, logging the
+original server-side:
+
+```go
+// 400 {"error":"localdriver: path segment \"../../etc/passwd\" escapes its parent directory"}
+// 500 {"error":"internal error"}   <- logged: mkdir /srv/trove/data: permission denied
+```
+
+The split exists because unclassified errors are usually wrapped os-level or
+SDK errors, and those carry absolute server filesystem paths, internal
+hostnames, and bucket layout. So when you wrap a sentinel, the message must
+name only what the caller supplied:
+
+```go
+// Good -- names the caller's own segment.
+return "", fmt.Errorf("mydriver: path segment %q escapes its parent directory: %w",
+    segment, driver.ErrInvalidPath)
+
+// Bad -- publishes where the storage root lives.
+return "", fmt.Errorf("mydriver: %q escapes %s: %w",
+    segment, resolvedRootDir, driver.ErrInvalidPath)
+```
+
+If a condition cannot be described without naming server-side detail, leave it
+unclassified. An opaque `500` is the correct answer for it.

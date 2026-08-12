@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/xraph/trove"
 	"github.com/xraph/trove/drivers/localdriver"
 )
 
@@ -163,6 +164,10 @@ func TestTraversal_ObjectOperations(t *testing.T) {
 				err := op(f, tc.key)
 
 				require.Error(t, err, "%s accepted traversal key %q", opName, tc.key)
+				// Classified, so the HTTP extension answers 400 rather than
+				// falling through to an opaque 500.
+				require.ErrorIs(t, err, trove.ErrInvalidPath,
+					"%s rejected %q without classifying it", opName, tc.key)
 				f.assertIntact(t)
 			})
 		}
@@ -226,6 +231,8 @@ func TestTraversal_BucketOperations(t *testing.T) {
 				err := op(f, tc.bucket)
 
 				require.Error(t, err, "%s accepted traversal bucket %q", opName, tc.bucket)
+				require.ErrorIs(t, err, trove.ErrInvalidPath,
+					"%s rejected %q without classifying it", opName, tc.bucket)
 				f.assertIntact(t)
 
 				// The root itself must survive: DeleteBucket(".") resolved to

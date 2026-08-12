@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/xraph/trove/driver"
 )
 
 // The SFTP driver resolves buckets and keys against a remote base path, so
@@ -57,6 +59,10 @@ func TestSafeJoin_RejectsTraversal(t *testing.T) {
 
 			require.Error(t, err, "safeJoin accepted %q", tc.parts)
 			require.Empty(t, got, "safeJoin returned a path alongside its error")
+			// Classified, so the HTTP extension answers 400 rather than
+			// falling through to an opaque 500.
+			require.ErrorIs(t, err, driver.ErrInvalidPath,
+				"rejection must be classified, not an unclassified error")
 		})
 	}
 }
@@ -140,6 +146,7 @@ func TestObjectPath_RejectsTraversal(t *testing.T) {
 
 			require.Error(t, err)
 			require.Empty(t, got)
+			require.ErrorIs(t, err, driver.ErrInvalidPath)
 		})
 	}
 

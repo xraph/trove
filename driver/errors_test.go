@@ -33,6 +33,17 @@ func TestSentinelHierarchy(t *testing.T) {
 		{"quota exceeded is not not-found", driver.ErrQuotaExceeded, driver.ErrNotFound, false},
 		{"quota exceeded is not permission denied", driver.ErrQuotaExceeded, driver.ErrPermissionDenied, false},
 		{"bucket exists is not not-found", driver.ErrBucketExists, driver.ErrNotFound, false},
+
+		// ErrInvalidPath is a rejection of the request, not a report about
+		// stored state. It must stay clear of the not-found family so an HTTP
+		// caller maps it to 400 rather than 404 — telling a client "no such
+		// object" when the key was never addressable is both wrong and a way
+		// to probe which keys exist.
+		{"invalid path matches itself", driver.ErrInvalidPath, driver.ErrInvalidPath, true},
+		{"invalid path is not not-found", driver.ErrInvalidPath, driver.ErrNotFound, false},
+		{"invalid path is not object not-found", driver.ErrInvalidPath, driver.ErrObjectNotFound, false},
+		{"invalid path is not permission denied", driver.ErrInvalidPath, driver.ErrPermissionDenied, false},
+		{"not-found is not an invalid path", driver.ErrNotFound, driver.ErrInvalidPath, false},
 	}
 
 	for _, tt := range tests {
@@ -58,6 +69,13 @@ func TestPermanent(t *testing.T) {
 		{"general not found", driver.ErrNotFound, true},
 		{"permission denied", driver.ErrPermissionDenied, true},
 		{"bucket exists", driver.ErrBucketExists, true},
+		// A malformed key does not become well-formed by asking again.
+		{"invalid path", driver.ErrInvalidPath, true},
+		{
+			name: "wrapped invalid path",
+			err:  fmt.Errorf("localdriver: path segment %q escapes its parent directory: %w", "../x", driver.ErrInvalidPath),
+			want: true,
+		},
 
 		// Wrapped sentinels are what a caller actually receives.
 		{

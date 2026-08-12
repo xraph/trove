@@ -58,30 +58,36 @@ func safeJoin(rootDir string, parts ...string) (string, error) {
 	dir := filepath.Clean(rootDir)
 	for _, p := range parts {
 		if p == "" || strings.Contains(p, "\x00") {
-			return "", fmt.Errorf("localdriver: invalid path segment %q", p)
+			return "", fmt.Errorf("localdriver: invalid path segment %q: %w", p, driver.ErrInvalidPath)
 		}
 		if isRooted(p) {
-			return "", fmt.Errorf("localdriver: path segment must be relative: %q", p)
+			return "", fmt.Errorf("localdriver: path segment must be relative: %q: %w", p, driver.ErrInvalidPath)
 		}
 
 		joined := filepath.Join(dir, p)
 		rel, err := filepath.Rel(dir, joined)
 		if err != nil {
+			// Not wrapped as ErrInvalidPath: Rel failing is a defect in this
+			// function's own inputs, not a judgement about the caller's
+			// segment, and the message may name the resolved directory.
 			return "", fmt.Errorf("localdriver: resolve path: %w", err)
 		}
+		// Every rejection below wraps driver.ErrInvalidPath so callers can
+		// classify it — the HTTP extension turns it into 400 rather than 500.
 		// These messages name the offending segment but never the directory
 		// it was resolved against: the segment came from the caller, while
 		// the resolved path is a server-side absolute path, and callers such
-		// as the HTTP extension put driver errors straight into responses.
+		// as the HTTP extension put classified driver errors straight into
+		// responses.
 		switch {
 		case rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)):
-			return "", fmt.Errorf("localdriver: path segment %q escapes its parent directory", p)
+			return "", fmt.Errorf("localdriver: path segment %q escapes its parent directory: %w", p, driver.ErrInvalidPath)
 		case rel == ".":
 			// The segment names its own parent rather than something inside
 			// it — a key of "." resolves to the bucket directory, and a
 			// bucket of "." to the root. DeleteBucket(".") would then hand
 			// os.RemoveAll the entire storage root.
-			return "", fmt.Errorf("localdriver: path segment %q does not name anything inside its parent directory", p)
+			return "", fmt.Errorf("localdriver: path segment %q does not name anything inside its parent directory: %w", p, driver.ErrInvalidPath)
 		}
 		dir = joined
 	}

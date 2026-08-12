@@ -14,7 +14,7 @@ func (h *Handler) casStore(w http.ResponseWriter, r *http.Request) {
 
 	hash, info, err := casEngine.Store(r.Context(), r.Body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpError(w, r, "cas_store", err)
 		return
 	}
 
@@ -34,7 +34,10 @@ func (h *Handler) casRetrieve(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
 	reader, err := casEngine.Retrieve(r.Context(), hash)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		// cas.ErrNotFound wraps driver.ErrNotFound, so an unknown hash still
+		// answers 404 — but a broken index now answers 500 instead of
+		// reporting a backend outage as missing content.
+		h.writeOpError(w, r, "cas_retrieve", err)
 		return
 	}
 	defer reader.Close()
@@ -54,7 +57,7 @@ func (h *Handler) casExists(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
 	exists, err := casEngine.Exists(r.Context(), hash)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.writeOpStatus(w, r, "cas_exists", err)
 		return
 	}
 

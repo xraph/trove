@@ -56,12 +56,12 @@ func safeJoin(basePath string, parts ...string) (string, error) {
 	dir := path.Clean(basePath)
 	for _, p := range parts {
 		if p == "" || strings.Contains(p, "\x00") {
-			return "", fmt.Errorf("sftpdriver: invalid path segment %q", p)
+			return "", fmt.Errorf("sftpdriver: invalid path segment %q: %w", p, driver.ErrInvalidPath)
 		}
 		// Backslashes are rejected too: the remote may be a Windows SFTP
 		// server, where "..\\.." climbs just as well as "../..".
 		if strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) {
-			return "", fmt.Errorf("sftpdriver: path segment must be relative: %q", p)
+			return "", fmt.Errorf("sftpdriver: path segment must be relative: %q: %w", p, driver.ErrInvalidPath)
 		}
 
 		joined := path.Join(dir, p)
@@ -70,16 +70,18 @@ func safeJoin(basePath string, parts ...string) (string, error) {
 			prefix += "/"
 		}
 		// As in localdriver, these messages name the caller's segment but not
-		// the remote path it resolved against.
+		// the remote path it resolved against, and every rejection wraps
+		// driver.ErrInvalidPath so callers can classify it as a malformed
+		// request rather than a backend failure.
 		switch {
 		case joined == dir:
 			// The segment names its own parent rather than something inside
 			// it — a key of "." resolves to the bucket directory, and a
 			// bucket of "." to the base path, which DeleteBucket would then
 			// remove recursively.
-			return "", fmt.Errorf("sftpdriver: path segment %q does not name anything inside its parent directory", p)
+			return "", fmt.Errorf("sftpdriver: path segment %q does not name anything inside its parent directory: %w", p, driver.ErrInvalidPath)
 		case !strings.HasPrefix(joined, prefix):
-			return "", fmt.Errorf("sftpdriver: path segment %q escapes its parent directory", p)
+			return "", fmt.Errorf("sftpdriver: path segment %q escapes its parent directory: %w", p, driver.ErrInvalidPath)
 		}
 		dir = joined
 	}
