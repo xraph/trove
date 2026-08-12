@@ -18,6 +18,7 @@ package gcsdriver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -114,6 +115,9 @@ func (d *GCSDriver) Ping(ctx context.Context) error {
 
 	_, err = client.Bucket(cfg.Bucket).Attrs(ctx)
 	if err != nil {
+		if cErr := classifyErr(err, cfg.Bucket, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("gcsdriver: ping: %w", err)
 	}
 	return nil
@@ -146,9 +150,15 @@ func (d *GCSDriver) Put(ctx context.Context, bucket, key string, r io.Reader, op
 	n, err := io.Copy(w, r)
 	if err != nil {
 		w.Close()
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: put %q: write: %w", key, err)
 	}
 	if err := w.Close(); err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: put %q: close: %w", key, err)
 	}
 
@@ -181,12 +191,18 @@ func (d *GCSDriver) Get(ctx context.Context, bucket, key string, _ ...driver.Get
 
 	reader, err := obj.NewReader(ctx)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: get %q: %w", key, err)
 	}
 
 	attrs, err := obj.Attrs(ctx)
 	if err != nil {
 		reader.Close()
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: get %q attrs: %w", key, err)
 	}
 
@@ -205,9 +221,12 @@ func (d *GCSDriver) Delete(ctx context.Context, bucket, key string, _ ...driver.
 
 	err = client.Bucket(bucket).Object(key).Delete(ctx)
 	if err != nil {
-		// Treat "not found" as idempotent delete.
-		if err == storage.ErrObjectNotExist {
-			return nil
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			// Delete is idempotent: a missing object is not a failure.
+			if errors.Is(cErr, driver.ErrObjectNotFound) {
+				return nil
+			}
+			return cErr
 		}
 		return fmt.Errorf("gcsdriver: delete %q: %w", key, err)
 	}
@@ -223,6 +242,9 @@ func (d *GCSDriver) Head(ctx context.Context, bucket, key string) (*driver.Objec
 
 	attrs, err := client.Bucket(bucket).Object(key).Attrs(ctx)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: head %q: %w", key, err)
 	}
 
@@ -262,6 +284,9 @@ func (d *GCSDriver) List(ctx context.Context, bucket string, opts ...driver.List
 			break
 		}
 		if err != nil {
+			if cErr := classifyErr(err, bucket, ""); cErr != nil {
+				return nil, cErr
+			}
 			return nil, fmt.Errorf("gcsdriver: list bucket %q: %w", bucket, err)
 		}
 
@@ -305,6 +330,11 @@ func (d *GCSDriver) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstK
 
 	attrs, err := dst.CopierFrom(src).Run(ctx)
 	if err != nil {
+		// A copy fails on the source far more often than the destination,
+		// so an unqualified not-found is attributed to the source.
+		if cErr := classifyErr(err, srcBucket, srcKey); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: copy %q → %q: %w", srcKey, dstKey, err)
 	}
 
@@ -323,6 +353,9 @@ func (d *GCSDriver) CreateBucket(ctx context.Context, name string, _ ...driver.B
 	}
 
 	if err := client.Bucket(name).Create(ctx, cfg.ProjectID, attrs); err != nil {
+		if cErr := classifyErr(err, name, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("gcsdriver: create bucket %q: %w", name, err)
 	}
 	return nil
@@ -336,6 +369,9 @@ func (d *GCSDriver) DeleteBucket(ctx context.Context, name string) error {
 	}
 
 	if err := client.Bucket(name).Delete(ctx); err != nil {
+		if cErr := classifyErr(err, name, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("gcsdriver: delete bucket %q: %w", name, err)
 	}
 	return nil
@@ -357,6 +393,9 @@ func (d *GCSDriver) ListBuckets(ctx context.Context) ([]driver.BucketInfo, error
 			break
 		}
 		if err != nil {
+			if cErr := classifyErr(err, "", ""); cErr != nil {
+				return nil, cErr
+			}
 			return nil, fmt.Errorf("gcsdriver: list buckets: %w", err)
 		}
 

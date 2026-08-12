@@ -58,7 +58,7 @@ func (d *AzureDriver) UploadPart(ctx context.Context, bucket, key, uploadID stri
 	state, ok := blockUploads[uploadID]
 	blockUploadsMu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("azuredriver: upload %q not found", uploadID)
+		return nil, fmt.Errorf("azuredriver: upload %q not found: %w", uploadID, driver.ErrNotFound)
 	}
 
 	// Block IDs must be base64-encoded and all the same length.
@@ -104,7 +104,7 @@ func (d *AzureDriver) CompleteMultipart(ctx context.Context, bucket, key, upload
 	}
 	blockUploadsMu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("azuredriver: upload %q not found", uploadID)
+		return nil, fmt.Errorf("azuredriver: upload %q not found: %w", uploadID, driver.ErrNotFound)
 	}
 
 	// Build block ID list in order.

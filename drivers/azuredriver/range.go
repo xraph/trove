@@ -33,6 +33,9 @@ func (d *AzureDriver) GetRange(ctx context.Context, bucket, key string, offset, 
 	blobClient := client.ServiceClient().NewContainerClient(bucket).NewBlobClient(key)
 	resp, err := blobClient.DownloadStream(ctx, downloadOpts)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("azuredriver: get range %q [%d:%d]: %w", key, offset, length, err)
 	}
 

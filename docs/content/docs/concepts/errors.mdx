@@ -12,9 +12,33 @@ Errors related to missing or duplicate resources:
 | Error | Description |
 |-------|-------------|
 | `ErrNotFound` | A requested resource cannot be found |
-| `ErrBucketNotFound` | A bucket cannot be found |
+| `ErrBucketNotFound` | A bucket cannot be found (unwraps to `ErrNotFound`) |
 | `ErrBucketExists` | Creating a bucket that already exists |
-| `ErrObjectNotFound` | An object cannot be found |
+| `ErrObjectNotFound` | An object cannot be found (unwraps to `ErrNotFound`) |
+
+The two specific not-found errors form a hierarchy with the general one, so a
+caller chooses how precisely it wants to match:
+
+```go
+errors.Is(err, trove.ErrObjectNotFound) // this exact object is gone
+errors.Is(err, trove.ErrNotFound)       // something is gone -- also true
+```
+
+Match `ErrNotFound` when any missing resource is handled the same way, and the
+specific sentinel when the distinction changes what you do.
+
+## Access Errors
+
+Errors raised when the backend refuses the operation:
+
+| Error | Description |
+|-------|-------------|
+| `ErrPermissionDenied` | Credentials are not authorized for the operation |
+| `ErrQuotaExceeded` | Storage quota or rate limit exceeded |
+
+`ErrPermissionDenied` will not clear on its own -- it needs the credentials or
+the access policy to change. `ErrQuotaExceeded` may clear with time, so it is
+usually worth retrying.
 
 ## Validation Errors
 
@@ -44,12 +68,6 @@ Errors related to data integrity and security:
 |-------|-------------|
 | `ErrChecksumMismatch` | Checksum verification failed -- data may be corrupted |
 | `ErrContentBlocked` | Content rejected by scanning middleware (threat detected) |
-
-## Quota Errors
-
-| Error | Description |
-|-------|-------------|
-| `ErrQuotaExceeded` | Storage quota exceeded for the tenant or bucket |
 
 ## Stream Errors
 
@@ -119,6 +137,7 @@ When Trove is used as an HTTP API, sentinel errors map to standard HTTP status c
 | `ErrBackendNotFound` | Not Found | 404 |
 | `ErrChecksumMismatch` | Conflict | 409 |
 | `ErrQuotaExceeded` | Insufficient Storage | 507 |
+| `ErrPermissionDenied` | Forbidden | 403 |
 | `ErrContentBlocked` | Unprocessable Entity | 422 |
 | `ErrStreamClosed` | Gone | 410 |
 | `ErrUploadExpired` | Gone | 410 |
@@ -146,3 +165,71 @@ if errors.Is(err, trove.ErrObjectNotFound) {
     // Matched despite wrapping
 }
 ```
+
+## Classifying Retryable Failures
+
+A scheduler or worker that reads its input from Trove needs to know whether a
+failure can ever succeed on a retry. A missing object is permanent: retrying it
+burns the whole backoff budget before the work is finally abandoned. A network
+blip is transient, and retrying is exactly right.
+
+`trove.Permanent()` answers that in one call, so every consumer classifies the
+same way instead of hand-rolling its own switch:
+
+```go
+reader, err := t.Get(ctx, "artifacts", inputKey)
+if err != nil {
+    if trove.Permanent(err) {
+        // The input is gone, or we are not allowed to read it. Retrying
+        // cannot change that -- fail now and dead-letter the job.
+        return job.Fail(err)
+    }
+    // Transient: backend trouble, throttling, a dropped connection.
+    return job.Retry(err)
+}
+```
+
+What counts as permanent:
+
+| Condition | `Permanent()` | Why |
+|-----------|:----------:|-----|
+| `ErrNotFound`, `ErrObjectNotFound`, `ErrBucketNotFound` | `true` | The resource will not reappear on its own |
+| `ErrPermissionDenied` | `true` | Nothing changes until credentials or policy do |
+| `ErrBucketExists` | `true` | The bucket will not stop existing because you asked again |
+| `ErrQuotaExceeded` | `false` | Refused now, may be granted later |
+| Anything unclassified | `false` | Assumed transient |
+
+Two choices in that table are deliberate.
+
+`ErrQuotaExceeded` is retryable: the operation was refused, not rejected. Give
+it a longer backoff than a network failure, since the condition clears on a
+quota window rather than a reconnect.
+
+An **unclassified** error is retryable. A backend can grow a failure mode that
+Trove does not yet map, and the cost is asymmetric: retrying something
+permanent wastes a backoff budget, while dead-lettering something transient
+silently discards work that would have succeeded.
+
+If an error somehow carries both a quota signal and a not-found signal, the
+retryable reading wins.
+
+## The Driver Contract
+
+Drivers **must** wrap these sentinels rather than returning a bare descriptive
+error, and must use the backend's typed error or status code to decide which
+one applies -- never a substring match on the message. The descriptive message
+is preserved; the sentinel is added with `%w`:
+
+```go
+return nil, fmt.Errorf("mydriver: object %q not found in bucket %q: %w",
+    key, bucket, driver.ErrObjectNotFound)
+```
+
+The canonical sentinels live in `github.com/xraph/trove/driver` so that
+out-of-tree drivers, which live in their own Go modules, can wrap them without
+importing the whole Trove facade. The root package re-exports every one of
+them, and because `errors.Is` compares by identity, `trove.ErrObjectNotFound`
+and `driver.ErrObjectNotFound` are the same value.
+
+The conformance suite in `trovetest` asserts this contract, so a driver that
+returns an unclassified not-found fails `RunDriverSuite`.

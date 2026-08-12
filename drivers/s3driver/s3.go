@@ -20,6 +20,7 @@ package s3driver
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -121,6 +122,9 @@ func (d *S3Driver) Ping(ctx context.Context) error {
 		Bucket: aws.String(cfg.Bucket),
 	})
 	if err != nil {
+		if cErr := classifyErr(err, cfg.Bucket, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("s3driver: ping: %w", err)
 	}
 	return nil
@@ -163,6 +167,9 @@ func (d *S3Driver) Put(ctx context.Context, bucket, key string, r io.Reader, opt
 
 	result, err := client.PutObject(ctx, input)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: put %q: %w", key, err)
 	}
 
@@ -212,6 +219,9 @@ func (d *S3Driver) Get(ctx context.Context, bucket, key string, opts ...driver.G
 
 	result, err := client.GetObject(ctx, input)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: get %q: %w", key, err)
 	}
 
@@ -273,6 +283,13 @@ func (d *S3Driver) Delete(ctx context.Context, bucket, key string, _ ...driver.D
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			// Delete is idempotent: a missing object is not a failure.
+			if errors.Is(cErr, driver.ErrObjectNotFound) {
+				return nil
+			}
+			return cErr
+		}
 		return fmt.Errorf("s3driver: delete %q: %w", key, err)
 	}
 	return nil
@@ -290,6 +307,9 @@ func (d *S3Driver) Head(ctx context.Context, bucket, key string) (*driver.Object
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: head %q: %w", key, err)
 	}
 
@@ -365,6 +385,9 @@ func (d *S3Driver) List(ctx context.Context, bucket string, opts ...driver.ListO
 
 	result, err := client.ListObjectsV2(ctx, input)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, ""); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: list bucket %q: %w", bucket, err)
 	}
 
@@ -423,6 +446,11 @@ func (d *S3Driver) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKe
 		CopySource: aws.String(copySource),
 	})
 	if err != nil {
+		// A copy fails on the source far more often than the destination,
+		// so an unqualified not-found is attributed to the source.
+		if cErr := classifyErr(err, srcBucket, srcKey); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: copy %q → %q: %w", srcKey, dstKey, err)
 	}
 
@@ -483,6 +511,9 @@ func (d *S3Driver) CreateBucket(ctx context.Context, name string, opts ...driver
 
 	_, err = client.CreateBucket(ctx, input)
 	if err != nil {
+		if cErr := classifyErr(err, name, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("s3driver: create bucket %q: %w", name, err)
 	}
 	return nil
@@ -499,6 +530,9 @@ func (d *S3Driver) DeleteBucket(ctx context.Context, name string) error {
 		Bucket: aws.String(name),
 	})
 	if err != nil {
+		if cErr := classifyErr(err, name, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("s3driver: delete bucket %q: %w", name, err)
 	}
 	return nil
@@ -513,6 +547,9 @@ func (d *S3Driver) ListBuckets(ctx context.Context) ([]driver.BucketInfo, error)
 
 	result, err := client.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
+		if cErr := classifyErr(err, "", ""); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: list buckets: %w", err)
 	}
 

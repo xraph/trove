@@ -20,12 +20,18 @@ func (d *GCSDriver) GetRange(ctx context.Context, bucket, key string, offset, le
 
 	reader, err := obj.NewRangeReader(ctx, offset, length)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: get range %q [%d:%d]: %w", key, offset, length, err)
 	}
 
 	attrs, err := obj.Attrs(ctx)
 	if err != nil {
 		reader.Close()
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("gcsdriver: get range %q attrs: %w", key, err)
 	}
 

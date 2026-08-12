@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -38,6 +39,77 @@ import (
 
 // Compile-time interface check.
 var _ driver.Driver = (*SFTPDriver)(nil)
+
+// safeJoin joins basePath with the given parts and verifies the resulting
+// path is contained within basePath, so a bucket or key containing ".."
+// cannot reach files elsewhere on the remote server.
+//
+// It mirrors the localdriver guard but works in remote path space: SFTP
+// paths are always slash-separated regardless of the client's OS, so this
+// uses path rather than filepath, and containment is checked with a prefix
+// test on the cleaned result because path has no Rel.
+//
+// As in localdriver, containment is enforced once per segment against the
+// directory the preceding segments produced, so a key cannot spend the
+// bucket segment climbing into a sibling bucket.
+func safeJoin(basePath string, parts ...string) (string, error) {
+	dir := path.Clean(basePath)
+	for _, p := range parts {
+		if p == "" || strings.Contains(p, "\x00") {
+			return "", fmt.Errorf("sftpdriver: invalid path segment %q", p)
+		}
+		// Backslashes are rejected too: the remote may be a Windows SFTP
+		// server, where "..\\.." climbs just as well as "../..".
+		if strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) {
+			return "", fmt.Errorf("sftpdriver: path segment must be relative: %q", p)
+		}
+
+		joined := path.Join(dir, p)
+		prefix := dir
+		if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+		// As in localdriver, these messages name the caller's segment but not
+		// the remote path it resolved against.
+		switch {
+		case joined == dir:
+			// The segment names its own parent rather than something inside
+			// it — a key of "." resolves to the bucket directory, and a
+			// bucket of "." to the base path, which DeleteBucket would then
+			// remove recursively.
+			return "", fmt.Errorf("sftpdriver: path segment %q does not name anything inside its parent directory", p)
+		case !strings.HasPrefix(joined, prefix):
+			return "", fmt.Errorf("sftpdriver: path segment %q escapes its parent directory", p)
+		}
+		dir = joined
+	}
+	return dir, nil
+}
+
+// classifyObjectErr maps an SFTP error encountered while reaching an object
+// onto the Trove sentinels, returning nil when the error is not one of the
+// classified conditions and the caller should wrap it itself.
+//
+// The server may answer with either an os-style error or a raw SFTP status
+// code depending on the operation, so both are checked. A missing file under
+// a missing bucket directory is reported as a missing bucket.
+func classifyObjectErr(client *sftp.Client, err error, basePath, bucket, key string) error {
+	switch {
+	case os.IsNotExist(err) || errors.Is(err, sftp.ErrSSHFxNoSuchFile):
+		bucketDir, joinErr := safeJoin(basePath, bucket)
+		if joinErr != nil {
+			return fmt.Errorf("sftpdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
+		}
+		if stat, statErr := client.Stat(bucketDir); statErr != nil || !stat.IsDir() {
+			return fmt.Errorf("sftpdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
+		}
+		return fmt.Errorf("sftpdriver: object %q not found in bucket %q: %w", key, bucket, driver.ErrObjectNotFound)
+	case os.IsPermission(err) || errors.Is(err, sftp.ErrSSHFxPermissionDenied):
+		return fmt.Errorf("sftpdriver: permission denied for object %q in bucket %q: %w", key, bucket, driver.ErrPermissionDenied)
+	default:
+		return nil
+	}
+}
 
 // metadata is the sidecar JSON structure stored alongside objects.
 type metadata struct {
@@ -166,7 +238,10 @@ func (d *SFTPDriver) Put(_ context.Context, bucket, key string, r io.Reader, opt
 		return nil, err
 	}
 
-	objPath := d.objectPath(drvCfg, bucket, key)
+	objPath, err := d.objectPath(drvCfg, bucket, key)
+	if err != nil {
+		return nil, err
+	}
 	objDir := path.Dir(objPath)
 
 	// Ensure parent directory exists.
@@ -228,12 +303,15 @@ func (d *SFTPDriver) Get(_ context.Context, bucket, key string, _ ...driver.GetO
 		return nil, err
 	}
 
-	objPath := d.objectPath(drvCfg, bucket, key)
+	objPath, err := d.objectPath(drvCfg, bucket, key)
+	if err != nil {
+		return nil, err
+	}
 
 	f, err := client.Open(objPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("sftpdriver: object %q not found in bucket %q", key, bucket)
+		if cErr := classifyObjectErr(client, err, drvCfg.BasePath, bucket, key); cErr != nil {
+			return nil, cErr
 		}
 		return nil, fmt.Errorf("sftpdriver: open file: %w", err)
 	}
@@ -269,11 +347,17 @@ func (d *SFTPDriver) Delete(_ context.Context, bucket, key string, _ ...driver.D
 		return err
 	}
 
-	objPath := d.objectPath(drvCfg, bucket, key)
+	objPath, err := d.objectPath(drvCfg, bucket, key)
+	if err != nil {
+		return err
+	}
 	metaPath := objPath + ".meta.json"
 
 	// Remove data file (idempotent).
-	if err := client.Remove(objPath); err != nil && !os.IsNotExist(err) {
+	if err := client.Remove(objPath); err != nil && !os.IsNotExist(err) && !errors.Is(err, sftp.ErrSSHFxNoSuchFile) {
+		if cErr := classifyObjectErr(client, err, drvCfg.BasePath, bucket, key); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("sftpdriver: delete: %w", err)
 	}
 
@@ -290,12 +374,15 @@ func (d *SFTPDriver) Head(_ context.Context, bucket, key string) (*driver.Object
 		return nil, err
 	}
 
-	objPath := d.objectPath(drvCfg, bucket, key)
+	objPath, err := d.objectPath(drvCfg, bucket, key)
+	if err != nil {
+		return nil, err
+	}
 
 	stat, err := client.Stat(objPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("sftpdriver: object %q not found in bucket %q", key, bucket)
+		if cErr := classifyObjectErr(client, err, drvCfg.BasePath, bucket, key); cErr != nil {
+			return nil, cErr
 		}
 		return nil, fmt.Errorf("sftpdriver: stat: %w", err)
 	}
@@ -321,10 +408,13 @@ func (d *SFTPDriver) List(_ context.Context, bucket string, opts ...driver.ListO
 		return nil, err
 	}
 
-	bucketDir := path.Join(drvCfg.BasePath, bucket)
+	bucketDir, err := safeJoin(drvCfg.BasePath, bucket)
+	if err != nil {
+		return nil, err
+	}
 	stat, err := client.Stat(bucketDir)
 	if err != nil || !stat.IsDir() {
-		return nil, fmt.Errorf("sftpdriver: bucket %q not found", bucket)
+		return nil, fmt.Errorf("sftpdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
 	}
 
 	var keys []string
@@ -387,14 +477,20 @@ func (d *SFTPDriver) Copy(_ context.Context, srcBucket, srcKey, dstBucket, dstKe
 		return nil, err
 	}
 
-	srcPath := d.objectPath(drvCfg, srcBucket, srcKey)
-	dstPath := d.objectPath(drvCfg, dstBucket, dstKey)
+	srcPath, err := d.objectPath(drvCfg, srcBucket, srcKey)
+	if err != nil {
+		return nil, err
+	}
+	dstPath, err := d.objectPath(drvCfg, dstBucket, dstKey)
+	if err != nil {
+		return nil, err
+	}
 
 	// Open source file.
 	srcFile, err := client.Open(srcPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("sftpdriver: source object %q not found in bucket %q", srcKey, srcBucket)
+		if cErr := classifyObjectErr(client, err, drvCfg.BasePath, srcBucket, srcKey); cErr != nil {
+			return nil, fmt.Errorf("sftpdriver: open source: %w", cErr)
 		}
 		return nil, fmt.Errorf("sftpdriver: open source: %w", err)
 	}
@@ -450,11 +546,14 @@ func (d *SFTPDriver) CreateBucket(_ context.Context, name string, _ ...driver.Bu
 		return err
 	}
 
-	bucketDir := path.Join(drvCfg.BasePath, name)
+	bucketDir, err := safeJoin(drvCfg.BasePath, name)
+	if err != nil {
+		return err
+	}
 
 	// Check if it already exists.
 	if stat, err := client.Stat(bucketDir); err == nil && stat.IsDir() {
-		return fmt.Errorf("sftpdriver: bucket %q already exists", name)
+		return fmt.Errorf("sftpdriver: bucket %q already exists: %w", name, driver.ErrBucketExists)
 	}
 
 	if err := client.MkdirAll(bucketDir); err != nil {
@@ -471,11 +570,14 @@ func (d *SFTPDriver) DeleteBucket(_ context.Context, name string) error {
 		return err
 	}
 
-	bucketDir := path.Join(drvCfg.BasePath, name)
+	bucketDir, err := safeJoin(drvCfg.BasePath, name)
+	if err != nil {
+		return err
+	}
 
 	stat, err := client.Stat(bucketDir)
 	if err != nil || !stat.IsDir() {
-		return fmt.Errorf("sftpdriver: bucket %q not found", name)
+		return fmt.Errorf("sftpdriver: bucket %q not found: %w", name, driver.ErrBucketNotFound)
 	}
 
 	// Recursively remove all contents.
@@ -546,8 +648,8 @@ func (d *SFTPDriver) getClient() (*sftp.Client, *sftpConfig, error) {
 	return d.client, d.cfg, nil
 }
 
-func (d *SFTPDriver) objectPath(cfg *sftpConfig, bucket, key string) string {
-	return path.Join(cfg.BasePath, bucket, key)
+func (d *SFTPDriver) objectPath(cfg *sftpConfig, bucket, key string) (string, error) {
+	return safeJoin(cfg.BasePath, bucket, key)
 }
 
 func (d *SFTPDriver) writeMeta(client *sftp.Client, objPath string, meta metadata) error {

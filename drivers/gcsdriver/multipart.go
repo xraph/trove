@@ -56,7 +56,7 @@ func (d *GCSDriver) UploadPart(ctx context.Context, bucket, key, uploadID string
 	state, ok := uploads[uploadID]
 	uploadsMu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("gcsdriver: upload %q not found", uploadID)
+		return nil, fmt.Errorf("gcsdriver: upload %q not found: %w", uploadID, driver.ErrNotFound)
 	}
 
 	// Upload as temporary object.
@@ -105,7 +105,7 @@ func (d *GCSDriver) CompleteMultipart(ctx context.Context, bucket, key, uploadID
 	}
 	uploadsMu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("gcsdriver: upload %q not found", uploadID)
+		return nil, fmt.Errorf("gcsdriver: upload %q not found: %w", uploadID, driver.ErrNotFound)
 	}
 
 	// Build source objects for compose.
@@ -160,7 +160,7 @@ func (d *GCSDriver) AbortMultipart(ctx context.Context, bucket, key, uploadID st
 	}
 	uploadsMu.Unlock()
 	if !ok {
-		return fmt.Errorf("gcsdriver: upload %q not found", uploadID)
+		return fmt.Errorf("gcsdriver: upload %q not found: %w", uploadID, driver.ErrNotFound)
 	}
 
 	// Clean up temporary part objects.
