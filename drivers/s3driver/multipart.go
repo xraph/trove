@@ -42,6 +42,9 @@ func (d *S3Driver) InitiateMultipart(ctx context.Context, bucket, key string, op
 
 	result, err := client.CreateMultipartUpload(ctx, input)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return "", cErr
+		}
 		return "", fmt.Errorf("s3driver: initiate multipart %q: %w", key, err)
 	}
 
@@ -73,6 +76,9 @@ func (d *S3Driver) UploadPart(ctx context.Context, bucket, key, uploadID string,
 		Body:       strings.NewReader(string(data)),
 	})
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: upload part %d for %q: %w", partNum, key, err)
 	}
 
@@ -112,6 +118,9 @@ func (d *S3Driver) CompleteMultipart(ctx context.Context, bucket, key, uploadID 
 		},
 	})
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: complete multipart %q: %w", key, err)
 	}
 
@@ -152,6 +161,9 @@ func (d *S3Driver) AbortMultipart(ctx context.Context, bucket, key, uploadID str
 		UploadId: aws.String(uploadID),
 	})
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("s3driver: abort multipart %q: %w", key, err)
 	}
 	return nil

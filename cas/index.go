@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/xraph/trove/driver"
 )
 
 // Entry represents a CAS index entry mapping a content hash to its storage location.
@@ -46,7 +48,13 @@ type Index interface {
 }
 
 // ErrNotFound is returned when a hash is not in the index.
-var ErrNotFound = fmt.Errorf("cas: hash not found")
+//
+// It wraps driver.ErrNotFound, so content missing from the CAS classifies the
+// same way as an object missing from a bucket: errors.Is(err, cas.ErrNotFound)
+// still identifies it precisely, while a caller that only needs to know the
+// content is permanently gone can match trove.ErrNotFound or call
+// trove.Permanent and get the right answer without special-casing the CAS.
+var ErrNotFound = fmt.Errorf("cas: hash not found: %w", driver.ErrNotFound)
 
 // MemoryIndex is an in-memory Index implementation for testing.
 type MemoryIndex struct {

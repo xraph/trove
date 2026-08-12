@@ -4,6 +4,32 @@
 // The Driver interface is intentionally minimal — advanced features are
 // exposed via capability interfaces (MultipartDriver, PresignDriver, etc.)
 // and the Unwrap pattern.
+//
+// # Error contract
+//
+// Callers classify failures with errors.Is, so implementations MUST wrap the
+// sentinels declared in errors.go rather than returning a bare descriptive
+// error. Keep the descriptive message — wrap with %w, do not replace:
+//
+//	return nil, fmt.Errorf("mydriver: object %q not found in bucket %q: %w",
+//	    key, bucket, driver.ErrObjectNotFound)
+//
+// The conditions that MUST be classified:
+//
+//   - a missing object   → ErrObjectNotFound (Get, Head, Copy source, GetRange)
+//   - a missing bucket   → ErrBucketNotFound (any operation naming a bucket)
+//   - an existing bucket → ErrBucketExists (CreateBucket)
+//   - an unauthorized op → ErrPermissionDenied
+//   - a quota/rate limit → ErrQuotaExceeded
+//
+// This matters to schedulers built on Trove: a permanently missing object
+// must fail its work item immediately, while a transient backend failure
+// should be retried. Without the sentinel the two are indistinguishable and
+// every retry is burned before the failure is recognized as permanent.
+//
+// Backends that report these conditions with a typed error or an HTTP status
+// code MUST use that signal rather than matching on message text. Delete is
+// idempotent by convention and returns nil for a missing object.
 package driver
 
 import (

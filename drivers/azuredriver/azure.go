@@ -19,6 +19,7 @@ package azuredriver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -122,6 +123,9 @@ func (d *AzureDriver) Ping(ctx context.Context) error {
 
 	_, err = client.ServiceClient().NewContainerClient(cfg.Container).GetProperties(ctx, nil)
 	if err != nil {
+		if cErr := classifyErr(err, cfg.Container, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("azuredriver: ping: %w", err)
 	}
 	return nil
@@ -162,6 +166,9 @@ func (d *AzureDriver) Put(ctx context.Context, bucket, key string, r io.Reader, 
 
 	_, err = client.UploadBuffer(ctx, bucket, key, data, uploadOpts)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("azuredriver: put %q: %w", key, err)
 	}
 
@@ -188,6 +195,9 @@ func (d *AzureDriver) Get(ctx context.Context, bucket, key string, _ ...driver.G
 
 	resp, err := client.DownloadStream(ctx, bucket, key, nil)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("azuredriver: get %q: %w", key, err)
 	}
 
@@ -246,9 +256,12 @@ func (d *AzureDriver) Delete(ctx context.Context, bucket, key string, _ ...drive
 
 	_, err = client.DeleteBlob(ctx, bucket, key, nil)
 	if err != nil {
-		// Idempotent: ignore "not found" errors.
-		if strings.Contains(err.Error(), "BlobNotFound") || strings.Contains(err.Error(), "404") {
-			return nil
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			// Delete is idempotent: a missing blob is not a failure.
+			if errors.Is(cErr, driver.ErrObjectNotFound) {
+				return nil
+			}
+			return cErr
 		}
 		return fmt.Errorf("azuredriver: delete %q: %w", key, err)
 	}
@@ -265,6 +278,9 @@ func (d *AzureDriver) Head(ctx context.Context, bucket, key string) (*driver.Obj
 	blobClient := client.ServiceClient().NewContainerClient(bucket).NewBlobClient(key)
 	resp, err := blobClient.GetProperties(ctx, nil)
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("azuredriver: head %q: %w", key, err)
 	}
 
@@ -343,6 +359,9 @@ func (d *AzureDriver) List(ctx context.Context, bucket string, opts ...driver.Li
 	for pager.More() {
 		resp, err := pager.NextPage(ctx)
 		if err != nil {
+			if cErr := classifyErr(err, bucket, ""); cErr != nil {
+				return nil, cErr
+			}
 			return nil, fmt.Errorf("azuredriver: list bucket %q: %w", bucket, err)
 		}
 
@@ -408,6 +427,11 @@ func (d *AzureDriver) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, ds
 
 	_, err = dstBlobClient.StartCopyFromURL(ctx, srcBlobClient.URL(), nil)
 	if err != nil {
+		// A copy fails on the source far more often than the destination,
+		// so an unqualified not-found is attributed to the source.
+		if cErr := classifyErr(err, srcBucket, srcKey); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("azuredriver: copy %q → %q: %w", srcKey, dstKey, err)
 	}
 
@@ -459,6 +483,9 @@ func (d *AzureDriver) CreateBucket(ctx context.Context, name string, _ ...driver
 
 	_, err = client.CreateContainer(ctx, name, nil)
 	if err != nil {
+		if cErr := classifyErr(err, name, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("azuredriver: create bucket %q: %w", name, err)
 	}
 	return nil
@@ -473,6 +500,9 @@ func (d *AzureDriver) DeleteBucket(ctx context.Context, name string) error {
 
 	_, err = client.DeleteContainer(ctx, name, nil)
 	if err != nil {
+		if cErr := classifyErr(err, name, ""); cErr != nil {
+			return cErr
+		}
 		return fmt.Errorf("azuredriver: delete bucket %q: %w", name, err)
 	}
 	return nil
@@ -491,6 +521,9 @@ func (d *AzureDriver) ListBuckets(ctx context.Context) ([]driver.BucketInfo, err
 	for pager.More() {
 		resp, err := pager.NextPage(ctx)
 		if err != nil {
+			if cErr := classifyErr(err, "", ""); cErr != nil {
+				return nil, cErr
+			}
 			return nil, fmt.Errorf("azuredriver: list buckets: %w", err)
 		}
 

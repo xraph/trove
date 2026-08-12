@@ -34,6 +34,9 @@ func (d *S3Driver) GetRange(ctx context.Context, bucket, key string, offset, len
 		Range:  aws.String(rangeHeader),
 	})
 	if err != nil {
+		if cErr := classifyErr(err, bucket, key); cErr != nil {
+			return nil, cErr
+		}
 		return nil, fmt.Errorf("s3driver: get range %q [%s]: %w", key, rangeHeader, err)
 	}
 

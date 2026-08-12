@@ -17,6 +17,16 @@ import (
 // RunDriverSuite runs the full conformance test suite against a driver.
 // The factory function must return a fresh, opened driver instance for
 // each test. Every Trove driver must pass this suite.
+//
+// The not-found cases assert against the sentinels in the driver package
+// rather than merely asserting that an error occurred, because classifying
+// a missing object is part of the driver contract — see the error contract
+// in the driver package documentation.
+//
+// Where a backend cannot distinguish a missing object from a missing bucket
+// (an object read against a bucket that does not exist reports differently
+// across providers), the suite asserts only the general ErrNotFound. The
+// per-driver tests pin the specific sentinel.
 func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 	t.Helper()
 
@@ -65,7 +75,7 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 			ctx := context.Background()
 
 			err := drv.DeleteBucket(ctx, "nonexistent")
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, driver.ErrNotFound)
 		})
 
 		t.Run("ListBuckets", func(t *testing.T) {
@@ -165,7 +175,7 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 			ctx := context.Background()
 
 			_, err := drv.Get(ctx, "nonexistent", "key")
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, driver.ErrNotFound)
 		})
 
 		t.Run("Get_ObjectNotFound", func(t *testing.T) {
@@ -175,7 +185,8 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 			require.NoError(t, drv.CreateBucket(ctx, "data"))
 
 			_, err := drv.Get(ctx, "data", "missing")
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, driver.ErrObjectNotFound)
+			assert.ErrorIs(t, err, driver.ErrNotFound)
 		})
 
 		t.Run("PutLargeObject", func(t *testing.T) {
@@ -250,7 +261,8 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 			require.NoError(t, drv.CreateBucket(ctx, "data"))
 
 			_, err := drv.Head(ctx, "data", "missing.txt")
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, driver.ErrObjectNotFound)
+			assert.ErrorIs(t, err, driver.ErrNotFound)
 		})
 	})
 
@@ -354,7 +366,7 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 			ctx := context.Background()
 
 			_, err := drv.List(ctx, "nonexistent")
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, driver.ErrNotFound)
 		})
 	})
 
@@ -410,7 +422,8 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 			require.NoError(t, drv.CreateBucket(ctx, "dst"))
 
 			_, err := drv.Copy(ctx, "src", "missing.txt", "dst", "copy.txt")
-			assert.Error(t, err)
+			assert.ErrorIs(t, err, driver.ErrObjectNotFound)
+			assert.ErrorIs(t, err, driver.ErrNotFound)
 		})
 	})
 

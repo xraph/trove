@@ -94,7 +94,7 @@ func (d *MemDriver) Put(_ context.Context, bucket, key string, r io.Reader, opts
 
 	objects, ok := d.buckets[bucket]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: bucket %q not found", bucket)
+		return nil, fmt.Errorf("memdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
 	}
 
 	ct := cfg.ContentType
@@ -134,12 +134,12 @@ func (d *MemDriver) Get(_ context.Context, bucket, key string, _ ...driver.GetOp
 
 	objects, ok := d.buckets[bucket]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: bucket %q not found", bucket)
+		return nil, fmt.Errorf("memdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
 	}
 
 	obj, ok := objects[key]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: object %q not found in bucket %q", key, bucket)
+		return nil, fmt.Errorf("memdriver: object %q not found in bucket %q: %w", key, bucket, driver.ErrObjectNotFound)
 	}
 
 	// Copy data so callers don't hold the lock.
@@ -164,7 +164,7 @@ func (d *MemDriver) Delete(_ context.Context, bucket, key string, _ ...driver.De
 
 	objects, ok := d.buckets[bucket]
 	if !ok {
-		return fmt.Errorf("memdriver: bucket %q not found", bucket)
+		return fmt.Errorf("memdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
 	}
 
 	if _, ok := objects[key]; !ok {
@@ -186,12 +186,12 @@ func (d *MemDriver) Head(_ context.Context, bucket, key string) (*driver.ObjectI
 
 	objects, ok := d.buckets[bucket]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: bucket %q not found", bucket)
+		return nil, fmt.Errorf("memdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
 	}
 
 	obj, ok := objects[key]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: object %q not found in bucket %q", key, bucket)
+		return nil, fmt.Errorf("memdriver: object %q not found in bucket %q: %w", key, bucket, driver.ErrObjectNotFound)
 	}
 
 	infoCopy := obj.info
@@ -211,7 +211,7 @@ func (d *MemDriver) List(_ context.Context, bucket string, opts ...driver.ListOp
 
 	objects, ok := d.buckets[bucket]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: bucket %q not found", bucket)
+		return nil, fmt.Errorf("memdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
 	}
 
 	// Collect keys sorted alphabetically.
@@ -260,17 +260,17 @@ func (d *MemDriver) Copy(_ context.Context, srcBucket, srcKey, dstBucket, dstKey
 
 	srcObjects, ok := d.buckets[srcBucket]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: source bucket %q not found", srcBucket)
+		return nil, fmt.Errorf("memdriver: source bucket %q not found: %w", srcBucket, driver.ErrBucketNotFound)
 	}
 
 	srcObj, ok := srcObjects[srcKey]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: source object %q not found in bucket %q", srcKey, srcBucket)
+		return nil, fmt.Errorf("memdriver: source object %q not found in bucket %q: %w", srcKey, srcBucket, driver.ErrObjectNotFound)
 	}
 
 	dstObjects, ok := d.buckets[dstBucket]
 	if !ok {
-		return nil, fmt.Errorf("memdriver: destination bucket %q not found", dstBucket)
+		return nil, fmt.Errorf("memdriver: destination bucket %q not found: %w", dstBucket, driver.ErrBucketNotFound)
 	}
 
 	// Deep copy data.
@@ -308,7 +308,7 @@ func (d *MemDriver) CreateBucket(_ context.Context, name string, _ ...driver.Buc
 	}
 
 	if _, ok := d.buckets[name]; ok {
-		return fmt.Errorf("memdriver: bucket %q already exists", name)
+		return fmt.Errorf("memdriver: bucket %q already exists: %w", name, driver.ErrBucketExists)
 	}
 
 	d.buckets[name] = make(map[string]*memObject)
@@ -326,7 +326,7 @@ func (d *MemDriver) DeleteBucket(_ context.Context, name string) error {
 	}
 
 	if _, ok := d.buckets[name]; !ok {
-		return fmt.Errorf("memdriver: bucket %q not found", name)
+		return fmt.Errorf("memdriver: bucket %q not found: %w", name, driver.ErrBucketNotFound)
 	}
 
 	delete(d.buckets, name)

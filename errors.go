@@ -1,21 +1,66 @@
 package trove
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/xraph/trove/driver"
+)
+
+// Errors that drivers classify. These are aliases of the sentinels defined
+// in the driver package — the canonical values live there so that drivers in
+// their own modules can wrap them without importing this package. Because
+// errors.Is compares by identity, trove.ErrObjectNotFound and
+// driver.ErrObjectNotFound match each other.
+//
+// ErrObjectNotFound and ErrBucketNotFound unwrap to ErrNotFound, so a caller
+// that only needs to know "this is permanently missing" can match ErrNotFound
+// and catch both.
+var (
+	// ErrNotFound is returned when a requested resource cannot be found.
+	// It is the parent of ErrBucketNotFound and ErrObjectNotFound.
+	ErrNotFound = driver.ErrNotFound
+
+	// ErrBucketNotFound is returned when a bucket cannot be found.
+	ErrBucketNotFound = driver.ErrBucketNotFound
+
+	// ErrBucketExists is returned when creating a bucket that already exists.
+	ErrBucketExists = driver.ErrBucketExists
+
+	// ErrObjectNotFound is returned when an object cannot be found.
+	ErrObjectNotFound = driver.ErrObjectNotFound
+
+	// ErrPermissionDenied is returned when the backend rejects the operation
+	// as unauthorized. Retrying will not help until access is granted.
+	ErrPermissionDenied = driver.ErrPermissionDenied
+
+	// ErrQuotaExceeded is returned when a storage quota or rate limit is
+	// exceeded. Retrying later may succeed.
+	ErrQuotaExceeded = driver.ErrQuotaExceeded
+)
+
+// Permanent reports whether err describes a condition that retrying cannot
+// resolve, so the caller should fail the operation now rather than spend its
+// backoff budget on attempts certain to fail the same way.
+//
+// A missing object, a permission failure, and an already-existing bucket are
+// permanent. An exceeded quota is not: it may be granted later. Neither is an
+// unclassified error — a condition Trove has not mapped is assumed transient,
+// because treating it as permanent would silently discard work whenever a
+// backend grows a failure mode the drivers do not yet recognize.
+//
+//	reader, err := t.Get(ctx, "artifacts", key)
+//	if err != nil {
+//	    if trove.Permanent(err) {
+//	        return job.Fail(err) // straight to the dead letter queue
+//	    }
+//	    return job.Retry(err) // transient — back off and try again
+//	}
+//
+// See the driver package for the full classification.
+func Permanent(err error) bool { return driver.Permanent(err) }
 
 // Sentinel errors returned by Trove operations.
 var (
-	// ErrNotFound is returned when a requested resource cannot be found.
-	ErrNotFound = errors.New("trove: not found")
-
-	// ErrBucketNotFound is returned when a bucket cannot be found.
-	ErrBucketNotFound = errors.New("trove: bucket not found")
-
-	// ErrBucketExists is returned when creating a bucket that already exists.
-	ErrBucketExists = errors.New("trove: bucket already exists")
-
-	// ErrObjectNotFound is returned when an object cannot be found.
-	ErrObjectNotFound = errors.New("trove: object not found")
-
 	// ErrKeyEmpty is returned when an object key is empty.
 	ErrKeyEmpty = errors.New("trove: key is required")
 
@@ -33,9 +78,6 @@ var (
 
 	// ErrChecksumMismatch is returned when a checksum verification fails.
 	ErrChecksumMismatch = errors.New("trove: checksum mismatch")
-
-	// ErrQuotaExceeded is returned when a storage quota is exceeded.
-	ErrQuotaExceeded = errors.New("trove: quota exceeded")
 
 	// ErrContentBlocked is returned when content is rejected by scanning middleware.
 	ErrContentBlocked = errors.New("trove: content blocked")

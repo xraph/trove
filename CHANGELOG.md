@@ -4,6 +4,27 @@ All notable changes to Trove are documented in this file.
 
 ## [Unreleased]
 
+### Error Classification
+
+#### Added
+- **Canonical sentinels in `driver`** (`driver/errors.go`): `ErrNotFound`, `ErrObjectNotFound`, `ErrBucketNotFound`, `ErrBucketExists`, `ErrPermissionDenied`, `ErrQuotaExceeded`. Out-of-tree drivers in their own modules can now wrap them without importing the root package. The root package re-exports all of them, so `trove.ErrObjectNotFound` and `driver.ErrObjectNotFound` are the same value.
+- **`ErrPermissionDenied`**: new sentinel for operations the backend refuses as unauthorized.
+- **Not-found hierarchy**: `ErrObjectNotFound` and `ErrBucketNotFound` now unwrap to `ErrNotFound`, so callers can match either the specific resource or any missing resource.
+- **Error contract documented** in the `driver` package: implementations MUST wrap the sentinels, using typed errors or status codes rather than message matching.
+- **`trove.Permanent(err) bool`** (and `driver.Permanent`): reports whether retrying can ever change the outcome, so consumers share one retry taxonomy instead of each writing their own. Permanent: `ErrNotFound` (and both specific forms), `ErrPermissionDenied`, `ErrBucketExists`. Retryable: `ErrQuotaExceeded` — refused now, may be granted later — and any unclassified error, since dead-lettering a transient failure discards work that would have succeeded.
+
+#### Fixed
+- **Drivers now wrap the sentinels for not-found conditions.** `memdriver`, `localdriver`, `s3driver`, `gcsdriver`, `azuredriver`, and `sftpdriver` previously returned descriptive-only errors (e.g. `memdriver: object %q not found in bucket %q`), so `errors.Is(err, trove.ErrNotFound)` returned `false` and callers could not tell a permanently missing object from a transient backend failure. Descriptive messages are preserved; the sentinel is added with `%w`. Covers Get, Head, Delete, Copy, List, GetRange, bucket operations, and multipart.
+- **`azuredriver` no longer classifies deletes by substring.** `Delete` matched `"BlobNotFound"` and `"404"` against the rendered message; it now reads the typed service error code via `bloberror.HasCode`.
+- **Cloud drivers map provider errors properly**: S3 `NoSuchKey`/`NoSuchBucket`/`NotFound`/`NoSuchUpload` plus API error codes and HTTP status; GCS `storage.ErrObjectNotExist`/`ErrBucketNotExist` and typed `googleapi.Error` (including the reason code that separates a quota 403 from a permission 403); Azure `BlobNotFound`/`ContainerNotFound` and `azcore.ResponseError` status.
+- **`cas.ErrNotFound` now wraps `driver.ErrNotFound`.** Content missing from the content-addressable store had the same classification gap as the drivers, so a consumer had to special-case the CAS to recognize a permanently missing blob. `errors.Is(err, cas.ErrNotFound)` is unaffected.
+- **Permission and quota failures are classified** where the backend reports them: `ErrPermissionDenied` and `ErrQuotaExceeded` across the cloud drivers, and `ErrPermissionDenied` for `localdriver` and `sftpdriver`.
+
+#### Changed
+- **`trovetest.RunDriverSuite`** asserts the sentinels on not-found paths instead of merely asserting that an error occurred, so every driver — including the gated cloud integration runs — is held to the contract.
+
+---
+
 ### Dependencies and Supply Chain
 
 #### Fixed
@@ -13,6 +34,8 @@ All notable changes to Trove are documented in this file.
 - **govulncheck now runs against each driver sub-module** in CI's `drivers` matrix job. It resolves imports per module, so the shared `go-ci.yml` `security` job — which runs at the repository root — never scanned `azuredriver`, `gcsdriver`, `s3driver`, or `sftpdriver` at all. Every third-party dependency the project ships lives in those modules, which is why the x/crypto findings above were invisible to CI while Dependabot reported them.
 - **The `drivers`, `extension`, `bench` and `lint` jobs no longer skip when the shared root-module workflow fails.** A reusable workflow reports a single conclusion for all of its jobs, so a `ci / Security` failure — currently two standard-library advisories about the runner's Go patch release — marked the whole `ci` job failed and skipped every job that declared `needs: ci`. The driver sub-modules and the extension module were therefore not being built or tested at all, and a skipped job reports as neither pass nor fail, so the coverage vanished without a red check anywhere. They now run unless the workflow is cancelled; `needs: ci` is kept for ordering.
 - **`.github/govulncheck-allowlist.txt`** records the reachable findings that remain in `gcsdriver`, `s3driver`, and `azuredriver`, all of them indirect. It is a backlog rather than an exemption: the gate fails on anything not listed, so removing a line is how a fix gets enforced. Standard-library findings are reported but never gate, since they track the runner's Go patch release rather than this repository, and gating on them would red every branch whenever a new Go version lands.
+
+---
 
 ### Phase 8: Cloud Drivers, Middleware, and Benchmarks
 
