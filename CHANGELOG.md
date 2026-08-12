@@ -4,6 +4,21 @@ All notable changes to Trove are documented in this file.
 
 ## [Unreleased]
 
+### Path Traversal
+
+#### Fixed
+- **`localdriver` applied its containment guard to one operation out of eight.** `safeJoin` was added to reject buckets and keys containing `..`, but only `Put` called it. `Get`, `Head`, `Delete`, `Copy` (source and destination), `List`, `CreateBucket`, and `DeleteBucket` each built their path with a bare `filepath.Join(rootDir, bucket, key)`, so a key of `../../etc/passwd` reached the filesystem unchecked on every one of them — readable via `Get`, removable via `Delete`. All of them now route through `safeJoin`, as does the bucket probe inside `classifyObjectErr`.
+- **A key could cross bucket boundaries even where the guard did run.** `safeJoin` checked containment once, against the root, after joining every segment, so a key could spend the bucket segment on the way out and still land inside the root. `Put("tenant-a", "../tenant-b/secret.txt")` wrote into another bucket and passed the check. Containment is now enforced once per segment, against the directory the preceding segments produced: a key stays inside its bucket and a bucket stays inside the root. Buckets are Trove's tenancy boundary, so root-only containment was the wrong invariant.
+- **`DeleteBucket(".")` deleted the entire storage root.** `.` resolved to `rootDir` itself, which was then handed to `os.RemoveAll`. The facade rejects an empty bucket name but not `.`. A segment that resolves to its own parent is now refused, which also stops `Delete(bucket, ".")` from removing a bucket directory through the object path.
+- **`sftpdriver` had no containment check at all.** `objectPath` joined `BasePath`, bucket, and key with `path.Join` and returned the result, so the same traversals applied to the remote server. It now uses an equivalent `safeJoin` in remote path space — slash-separated regardless of the client's OS, with prefix-based containment since `path` has no `Rel` — and every operation handles its error.
+
+#### Added
+- **Rooted segments are rejected rather than silently reinterpreted.** `filepath.Join` treats a key of `/etc/passwd` as relative and stores the object at `<root>/<bucket>/etc/passwd`, handing the caller back an object at a key it never asked for. Leading separators, backslashes, and volume names are now refused on every platform, since `filepath.IsAbs` alone answers `false` for `/etc/passwd` on Windows.
+- **Traversal test suites for both drivers.** `drivers/localdriver/traversal_test.go` runs every operation against traversal keys and bucket names, asserting both the rejection and that a planted out-of-root file and a sibling bucket's object are byte-identical afterward — an error alone does not prove containment. `drivers/sftpdriver/traversal_test.go` covers `safeJoin` and `objectPath` directly, since the SFTP operations need a live server, and adds a source assertion that no remote path is built with a bare `path.Join`. Both include control cases so that a guard rejecting everything would fail.
+
+#### Changed
+- **The gosec `G703` finding on `localdriver`'s `os.Rename` is suppressed with a documented justification.** `objPath` is containment-checked by `safeJoin` before it reaches the rename, but gosec's taint analysis tracks the flow from the bucket and key parameters to the filesystem sink and has no way to recognize a `filepath.Rel` check as a sanitizer — the check is already in the flow and the finding persists. Silencing it structurally would mean laundering the path through something the analyzer cannot follow, which would hide real traversal bugs there in future.
+
 ### Error Classification
 
 #### Added
@@ -20,7 +35,6 @@ All notable changes to Trove are documented in this file.
 - **Cloud drivers map provider errors properly**: S3 `NoSuchKey`/`NoSuchBucket`/`NotFound`/`NoSuchUpload` plus API error codes and HTTP status; GCS `storage.ErrObjectNotExist`/`ErrBucketNotExist` and typed `googleapi.Error` (including the reason code that separates a quota 403 from a permission 403); Azure `BlobNotFound`/`ContainerNotFound` and `azcore.ResponseError` status.
 - **`cas.ErrNotFound` now wraps `driver.ErrNotFound`.** Content missing from the content-addressable store had the same classification gap as the drivers, so a consumer had to special-case the CAS to recognize a permanently missing blob. `errors.Is(err, cas.ErrNotFound)` is unaffected.
 - **Permission and quota failures are classified** where the backend reports them: `ErrPermissionDenied` and `ErrQuotaExceeded` across the cloud drivers, and `ErrPermissionDenied` for `localdriver` and `sftpdriver`.
-
 - **Path-traversal rejections are classified.** `localdriver` and `sftpdriver` `safeJoin` returned bare descriptive errors, so every rejection reached the HTTP extension unclassified and became a `500`. They now wrap `ErrInvalidPath`.
 - **The HTTP extension no longer echoes raw error text into 5xx responses.** `extension/handler` put `err.Error()` straight into the body on every driver failure. Because driver errors wrap os-level ones, a failed write answered with e.g. `mkdir /srv/trove/data/nested: permission denied` — disclosing the absolute storage root and the directory layout under it to any client that could provoke a failure. An unclassified error is now logged server-side with its operation and request path, and the client receives `{"error":"internal error"}`.
 - **Malformed keys and bucket names answer `400`, not `500` or `404`.** A percent-encoded traversal (`%2e%2e%2f…`, which `net/http`'s mux passes through to the handler intact, unlike a literal `../`) previously returned `500` on `PUT`/`DELETE`/list and `404` on `GET`/`HEAD`. `GET` and `HEAD` also reported *every* failure as `404`, so a backend outage was indistinguishable from a missing object.
