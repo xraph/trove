@@ -25,6 +25,53 @@ jobs:
     with:
       go-versions: '["1.25"]'
       os: '["ubuntu-latest"]'
+      # The shared security job gates on any govulncheck finding, including
+      # standard-library ones. Those describe the runner's Go patch release
+      # rather than this repository, so every Go release red-lined main for
+      # the window between the advisory landing and the toolchain reaching
+      # the setup-go manifest. Nobody here could act on it, and the failure
+      # cascaded: `ci` reports one conclusion for all its jobs, so the driver
+      # and extension jobs skipped with it.
+      #
+      # gosec still gates from that job. govulncheck now gates from the
+      # vulncheck job below, which reports stdlib findings and blocks only on
+      # reachable third-party ones.
+      govulncheck-fail-on-findings: false
+
+  # ─── Vulnerability Gate ───────────────────────────────────────────────
+  # govulncheck resolves imports per module, so the shared workflow's scan of
+  # the repository root never saw the sub-modules where every third-party
+  # dependency actually lives. Each module is scanned on its own here.
+  vulncheck:
+    name: Vulncheck (${{ matrix.module.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - {name: root, dir: .}
+          - {name: extension, dir: extension}
+          - {name: azuredriver, dir: drivers/azuredriver}
+          - {name: gcsdriver, dir: drivers/gcsdriver}
+          - {name: s3driver, dir: drivers/s3driver}
+          - {name: sftpdriver, dir: drivers/sftpdriver}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.module.dir }}/go.mod
+          cache: true
+          cache-dependency-path: ${{ matrix.module.dir }}/go.sum
+
+      - name: Scan
+        uses: ./.github/actions/govulncheck-gate
+        with:
+          module: ${{ matrix.module.dir }}
+          name: ${{ matrix.module.name }}
 
   # ─── Driver Sub-Modules ──────────────────────────────────────────────
   drivers:
@@ -76,77 +123,6 @@ jobs:
       - name: Test
         working-directory: drivers/${{ matrix.driver }}
         run: go test -race -count=1 ./...
-
-      # govulncheck resolves imports per module, so the shared go-ci.yml
-      # `security` job — which runs at the repository root — never sees these
-      # sub-modules at all. Every third-party dependency the project ships
-      # lives here, so without this step they were entirely unscanned.
-      #
-      # Module findings gate; standard-library findings only report. A stdlib
-      # finding tracks the runner's Go patch release rather than anything in
-      # this repository, so gating on it reds every branch whenever a new Go
-      # release lands, regardless of whether this code is affected.
-      - name: Vulnerability scan (govulncheck)
-        working-directory: drivers/${{ matrix.driver }}
-        env:
-          GOVULNCHECK_VERSION: v1.6.0
-          DRIVER: ${{ matrix.driver }}
-          ALLOWLIST: ${{ github.workspace }}/.github/govulncheck-allowlist.txt
-        run: |
-          set -euo pipefail
-          go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
-
-          REPORT="$RUNNER_TEMP/govulncheck-$DRIVER.json"
-          # JSON mode is for programmatic use and does not signal findings
-          # through its exit code; the parse below is what decides.
-          govulncheck -format json ./... > "$REPORT" || true
-
-          # A finding gates only when its trace reaches a called symbol.
-          # Findings at module or package level mean the dependency is present
-          # but the vulnerable code is never invoked.
-          reachable() {
-            jq -sr --arg scope "$1" '
-              [ .[]
-                | select(has("finding")) | .finding
-                | select(.trace[0].function != null)
-                | select(if $scope == "stdlib"
-                         then .trace[0].module == "stdlib"
-                         else .trace[0].module != "stdlib" end)
-                | .osv ] | unique | .[]
-            ' "$REPORT"
-          }
-
-          STDLIB=$(reachable stdlib)
-          MODULE=$(reachable module)
-          ALLOWED=$(grep -E "^$DRIVER[[:space:]]" "$ALLOWLIST" 2>/dev/null | awk '{print $2}' | sort -u || true)
-          NEW=$(comm -23 <(printf '%s\n' "$MODULE" | sed '/^$/d') <(printf '%s\n' "$ALLOWED" | sed '/^$/d'))
-
-          # Report to both the job log and the run summary. The summary is for
-          # humans reading the run page; stdout is what `gh run view --log`
-          # and anyone debugging a failure actually gets. A step whose
-          # reasoning appears only in the summary looks like it did nothing.
-          emit() {
-            echo "govulncheck[$DRIVER] $1"
-            echo "- \`$DRIVER\` $1" >> "$GITHUB_STEP_SUMMARY"
-          }
-
-          if [ -n "$STDLIB" ]; then
-            emit "stdlib (toolchain, not gating): $(echo $STDLIB)"
-          fi
-          if [ -n "$ALLOWED" ]; then
-            emit "known backlog (allowlisted): $(echo $ALLOWED)"
-          fi
-
-          if [ -n "$NEW" ]; then
-            emit "**new reachable dependency vulnerabilities**: $(echo $NEW)"
-            echo "::error::new reachable dependency vulnerabilities in $DRIVER: $(echo $NEW)"
-            echo "Fix by upgrading the dependency. To accept it for now, add it to"
-            echo ".github/govulncheck-allowlist.txt with a reason."
-            govulncheck ./... || true
-            exit 1
-          fi
-
-          emit "no new reachable dependency vulnerabilities"
 
   # ─── Extension Module ─────────────────────────────────────────────────
   extension:
