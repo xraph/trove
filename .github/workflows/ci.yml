@@ -182,6 +182,13 @@ jobs:
         working-directory: extension
         run: go build ./...
 
+      # The extension module was built but never tested, so extension/handler's
+      # tests — including the HTTP status mapping and error-disclosure tests
+      # added with this change — would have compiled in CI and never run.
+      - name: Test
+        working-directory: extension
+        run: go test -race -count=1 ./...
+
   # ─── Bench Module ────────────────────────────────────────────────────
   bench:
     name: Bench
