@@ -4,6 +4,15 @@ All notable changes to Trove are documented in this file.
 
 ## [Unreleased]
 
+### Dependencies and Supply Chain
+
+#### Fixed
+- **`sftpdriver`: `golang.org/x/crypto` v0.37.0 → v0.52.0.** Five advisories in `x/crypto/ssh` were reachable, not merely present — `Open` calls `ssh.Dial`, `ssh.ParsePrivateKey`, and `sftp.NewClient` directly: infinite loop on large channel writes (GO-2026-5020), FIDO/U2F physical-interaction bypass (GO-2026-5019), DoS from pathological RSA/DSA parameters (GO-2026-5018), client-triggered server deadlock (GO-2026-5017), and a byte-arithmetic underflow panic (GO-2026-5013). The module's `go` directive is unchanged; x/crypto v0.52.0 requires only Go 1.25.0.
+
+#### Added
+- **govulncheck now runs against each driver sub-module** in CI's `drivers` matrix job. It resolves imports per module, so the shared `go-ci.yml` `security` job — which runs at the repository root — never scanned `azuredriver`, `gcsdriver`, `s3driver`, or `sftpdriver` at all. Every third-party dependency the project ships lives in those modules, which is why the x/crypto findings above were invisible to CI while Dependabot reported them.
+- **`.github/govulncheck-allowlist.txt`** records the reachable findings that remain in `gcsdriver`, `s3driver`, and `azuredriver`, all of them indirect. It is a backlog rather than an exemption: the gate fails on anything not listed, so removing a line is how a fix gets enforced. Standard-library findings are reported but never gate, since they track the runner's Go patch release rather than this repository, and gating on them would red every branch whenever a new Go version lands.
+
 ### Phase 8: Cloud Drivers, Middleware, and Benchmarks
 
 #### Added — Storage Drivers
