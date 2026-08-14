@@ -121,15 +121,24 @@ jobs:
           ALLOWED=$(grep -E "^$DRIVER[[:space:]]" "$ALLOWLIST" 2>/dev/null | awk '{print $2}' | sort -u || true)
           NEW=$(comm -23 <(printf '%s\n' "$MODULE" | sed '/^$/d') <(printf '%s\n' "$ALLOWED" | sed '/^$/d'))
 
+          # Report to both the job log and the run summary. The summary is for
+          # humans reading the run page; stdout is what `gh run view --log`
+          # and anyone debugging a failure actually gets. A step whose
+          # reasoning appears only in the summary looks like it did nothing.
+          emit() {
+            echo "govulncheck[$DRIVER] $1"
+            echo "- \`$DRIVER\` $1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
           if [ -n "$STDLIB" ]; then
-            echo "- \`$DRIVER\` stdlib (toolchain, not gating): $(echo $STDLIB)" >> "$GITHUB_STEP_SUMMARY"
+            emit "stdlib (toolchain, not gating): $(echo $STDLIB)"
           fi
           if [ -n "$ALLOWED" ]; then
-            echo "- \`$DRIVER\` known backlog (allowlisted): $(echo $ALLOWED)" >> "$GITHUB_STEP_SUMMARY"
+            emit "known backlog (allowlisted): $(echo $ALLOWED)"
           fi
 
           if [ -n "$NEW" ]; then
-            echo "- \`$DRIVER\` **new reachable dependency vulnerabilities**: $(echo $NEW)" >> "$GITHUB_STEP_SUMMARY"
+            emit "**new reachable dependency vulnerabilities**: $(echo $NEW)"
             echo "::error::new reachable dependency vulnerabilities in $DRIVER: $(echo $NEW)"
             echo "Fix by upgrading the dependency. To accept it for now, add it to"
             echo ".github/govulncheck-allowlist.txt with a reason."
@@ -137,7 +146,7 @@ jobs:
             exit 1
           fi
 
-          echo "- \`$DRIVER\`: no new reachable dependency vulnerabilities" >> "$GITHUB_STEP_SUMMARY"
+          emit "no new reachable dependency vulnerabilities"
 
   # ─── Extension Module ─────────────────────────────────────────────────
   extension:
