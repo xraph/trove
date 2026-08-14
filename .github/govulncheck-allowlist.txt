@@ -1,0 +1,37 @@
+# Known-reachable dependency vulnerabilities in the driver sub-modules.
+#
+# The govulncheck step in ci.yml's `drivers` job fails on any reachable
+# vulnerability in a third-party module that is NOT listed here. This file is
+# therefore a backlog, not an exemption: an entry means "we know, it is
+# tracked, it does not block the next unrelated PR" — never "this is fine".
+#
+# The gate exists to stop NEW findings landing. Removing a line is how you
+# enforce a fix: bump the dependency, delete the entry, and the job goes green
+# on its own. Adding a line requires a reason.
+#
+# Standard-library findings are reported but never gate, because they track
+# the runner's Go patch release rather than anything in this repository — the
+# toolchain moving would otherwise red every branch on a schedule nobody here
+# controls.
+#
+# Format: <driver> <OSV-ID>
+#
+# Audited 2026-08-13 against govulncheck v1.6.0. sftpdriver is deliberately
+# absent: its x/crypto/ssh findings were reachable through ssh.Dial and
+# ssh.ParsePrivateKey in Open, and were fixed by bumping to v0.52.0 rather
+# than being listed here.
+
+# gcsdriver — all indirect, via cloud.google.com/go/storage's dependency tree.
+gcsdriver GO-2026-6061   # grpc: xDS RBAC + HTTP/2 server. Needs grpc v1.82.1.
+gcsdriver GO-2026-4394   # otel/sdk: PATH hijacking → arbitrary code execution.
+gcsdriver GO-2026-4918   # x/net: HTTP/2 infinite loop on bad SETTINGS_MAX_FRAME_SIZE.
+gcsdriver GO-2026-5026   # x/net/idna: accepts ASCII-only Punycode labels.
+gcsdriver GO-2026-5970   # x/text: infinite loop on invalid input.
+
+# s3driver — one finding, surfaced through two module paths.
+s3driver GO-2026-5764    # aws eventstream decoder panic. Needs service/s3 v1.97.3.
+
+# azuredriver — all indirect, via azure-sdk-for-go's dependency tree.
+azuredriver GO-2026-4918 # x/net: HTTP/2 infinite loop on bad SETTINGS_MAX_FRAME_SIZE.
+azuredriver GO-2026-5026 # x/net/idna: accepts ASCII-only Punycode labels.
+azuredriver GO-2026-5970 # x/text: infinite loop on invalid input.

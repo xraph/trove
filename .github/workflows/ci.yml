@@ -69,6 +69,68 @@ jobs:
         working-directory: drivers/${{ matrix.driver }}
         run: go test -race -count=1 ./...
 
+      # govulncheck resolves imports per module, so the shared go-ci.yml
+      # `security` job — which runs at the repository root — never sees these
+      # sub-modules at all. Every third-party dependency the project ships
+      # lives here, so without this step they were entirely unscanned.
+      #
+      # Module findings gate; standard-library findings only report. A stdlib
+      # finding tracks the runner's Go patch release rather than anything in
+      # this repository, so gating on it reds every branch whenever a new Go
+      # release lands, regardless of whether this code is affected.
+      - name: Vulnerability scan (govulncheck)
+        working-directory: drivers/${{ matrix.driver }}
+        env:
+          GOVULNCHECK_VERSION: v1.6.0
+          DRIVER: ${{ matrix.driver }}
+          ALLOWLIST: ${{ github.workspace }}/.github/govulncheck-allowlist.txt
+        run: |
+          set -euo pipefail
+          go install "golang.org/x/vuln/cmd/govulncheck@$GOVULNCHECK_VERSION"
+
+          REPORT="$RUNNER_TEMP/govulncheck-$DRIVER.json"
+          # JSON mode is for programmatic use and does not signal findings
+          # through its exit code; the parse below is what decides.
+          govulncheck -format json ./... > "$REPORT" || true
+
+          # A finding gates only when its trace reaches a called symbol.
+          # Findings at module or package level mean the dependency is present
+          # but the vulnerable code is never invoked.
+          reachable() {
+            jq -sr --arg scope "$1" '
+              [ .[]
+                | select(has("finding")) | .finding
+                | select(.trace[0].function != null)
+                | select(if $scope == "stdlib"
+                         then .trace[0].module == "stdlib"
+                         else .trace[0].module != "stdlib" end)
+                | .osv ] | unique | .[]
+            ' "$REPORT"
+          }
+
+          STDLIB=$(reachable stdlib)
+          MODULE=$(reachable module)
+          ALLOWED=$(grep -E "^$DRIVER[[:space:]]" "$ALLOWLIST" 2>/dev/null | awk '{print $2}' | sort -u || true)
+          NEW=$(comm -23 <(printf '%s\n' "$MODULE" | sed '/^$/d') <(printf '%s\n' "$ALLOWED" | sed '/^$/d'))
+
+          if [ -n "$STDLIB" ]; then
+            echo "- \`$DRIVER\` stdlib (toolchain, not gating): $(echo $STDLIB)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "$ALLOWED" ]; then
+            echo "- \`$DRIVER\` known backlog (allowlisted): $(echo $ALLOWED)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -n "$NEW" ]; then
+            echo "- \`$DRIVER\` **new reachable dependency vulnerabilities**: $(echo $NEW)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::new reachable dependency vulnerabilities in $DRIVER: $(echo $NEW)"
+            echo "Fix by upgrading the dependency. To accept it for now, add it to"
+            echo ".github/govulncheck-allowlist.txt with a reason."
+            govulncheck ./... || true
+            exit 1
+          fi
+
+          echo "- \`$DRIVER\`: no new reachable dependency vulnerabilities" >> "$GITHUB_STEP_SUMMARY"
+
   # ─── Extension Module ─────────────────────────────────────────────────
   extension:
     name: Extension
