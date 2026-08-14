@@ -1,9 +1,10 @@
-# Known-reachable dependency vulnerabilities in the driver sub-modules.
+# Known-reachable dependency vulnerabilities, per module.
 #
-# The govulncheck step in ci.yml's `drivers` job fails on any reachable
-# vulnerability in a third-party module that is NOT listed here. This file is
-# therefore a backlog, not an exemption: an entry means "we know, it is
-# tracked, it does not block the next unrelated PR" — never "this is fine".
+# ci.yml's `vulncheck` job scans every module in the repository through
+# .github/actions/govulncheck-gate and fails on any reachable vulnerability in
+# a third-party module that is NOT listed here. This file is therefore a
+# backlog, not an exemption: an entry means "we know, it is tracked, it does
+# not block the next unrelated PR", never "this is fine".
 #
 # The gate exists to stop NEW findings landing. Removing a line is how you
 # enforce a fix: bump the dependency, delete the entry, and the job goes green
@@ -16,10 +17,10 @@
 #
 # Format: <driver> <OSV-ID>
 #
-# Audited 2026-08-13 against govulncheck v1.6.0. sftpdriver is deliberately
-# absent: its x/crypto/ssh findings were reachable through ssh.Dial and
-# ssh.ParsePrivateKey in Open, and were fixed by bumping to v0.52.0 rather
-# than being listed here.
+# Audited 2026-08-14 against govulncheck v1.6.0. Absent from this file, and
+# passing on their own: root, extension, sftpdriver. sftpdriver's x/crypto/ssh
+# findings were reachable through ssh.Dial and ssh.ParsePrivateKey in Open,
+# and were fixed by bumping to v0.52.0 rather than being listed here.
 
 # gcsdriver — all indirect, via cloud.google.com/go/storage's dependency tree.
 gcsdriver GO-2026-6061   # grpc: xDS RBAC + HTTP/2 server. Needs grpc v1.82.1.
