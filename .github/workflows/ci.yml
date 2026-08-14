@@ -30,6 +30,14 @@ jobs:
   drivers:
     name: Driver (${{ matrix.driver }})
     runs-on: ubuntu-latest
+    # `needs: ci` orders this after the root module's checks, but a reusable
+    # workflow reports one conclusion for all of its jobs — so any failure
+    # inside it, including a govulncheck finding about the runner's Go patch
+    # release, skipped this job entirely. These are independent modules whose
+    # build and tests have nothing to do with the root module's scan result,
+    # and a skipped job reports as neither pass nor fail, so the coverage
+    # disappeared silently. Run unless the workflow was actually cancelled.
+    if: ${{ !cancelled() }}
     needs: ci
     strategy:
       fail-fast: false
@@ -135,6 +143,9 @@ jobs:
   extension:
     name: Extension
     runs-on: ubuntu-latest
+    # See the drivers job: a reusable-workflow failure must not silently
+    # skip an independent module's tests.
+    if: ${{ !cancelled() }}
     needs: ci
 
     steps:
@@ -166,6 +177,8 @@ jobs:
   bench:
     name: Bench
     runs-on: ubuntu-latest
+    # See the drivers job.
+    if: ${{ !cancelled() }}
     needs: ci
 
     steps:
@@ -197,6 +210,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    # See the drivers job.
+    if: ${{ !cancelled() }}
     needs: ci
 
     steps:
