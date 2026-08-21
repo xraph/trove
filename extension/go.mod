@@ -4,19 +4,19 @@ go 1.26.0
 
 require (
 	github.com/a-h/templ v0.3.1020
-	github.com/xraph/chronicle v1.6.0
+	github.com/xraph/chronicle v1.6.1
 	github.com/xraph/dispatch v1.6.0
-	github.com/xraph/forge v1.9.7
+	github.com/xraph/forge v1.9.8
 	github.com/xraph/forgeui v1.4.1
 	github.com/xraph/go-utils v1.1.6
-	github.com/xraph/grove v1.6.0
-	github.com/xraph/grove/drivers/mongodriver v1.6.0
-	github.com/xraph/grove/drivers/pgdriver v1.6.0
-	github.com/xraph/grove/drivers/sqlitedriver v1.6.0
+	github.com/xraph/grove v1.6.1
+	github.com/xraph/grove/drivers/mongodriver v1.6.1
+	github.com/xraph/grove/drivers/pgdriver v1.6.1
+	github.com/xraph/grove/drivers/sqlitedriver v1.6.1
 	github.com/xraph/trove v0.0.0
 	github.com/xraph/vault v1.6.0
 	github.com/xraph/vessel v1.0.4
-	github.com/xraph/warden v1.6.0
+	github.com/xraph/warden v1.6.1
 	go.mongodb.org/mongo-driver/v2 v2.8.0
 )
 
