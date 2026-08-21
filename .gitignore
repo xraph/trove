@@ -19,3 +19,6 @@ build-errors.log
 
 # Local design notes, not part of the published module
 /_project_files/
+
+# ─── Local agent config ─────────────────────────────────────
+.claude/
