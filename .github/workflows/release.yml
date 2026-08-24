@@ -30,6 +30,27 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
+
+            # Go only recognises semver tags that start with "v". A dispatch
+            # input of "1.6.3" produced tags the module system ignored, so
+            # `go mod tidy` in every consumer failed with "unknown revision"
+            # while the tags sat there in the repo looking fine. Normalise the
+            # leading v, then reject anything still not semver so a typo fails
+            # here instead of shipping an invisible release.
+            case "$TAG" in
+              v*) ;;
+              *)
+                echo "Normalising tag $TAG to v$TAG"
+                TAG="v$TAG"
+                ;;
+            esac
+
+            if ! printf '%s' "$TAG" \
+              | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+              echo "::error::'$TAG' is not a valid module tag; expected vX.Y.Z"
+              exit 1
+            fi
+
             echo "Creating tag $TAG"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
