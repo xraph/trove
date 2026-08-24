@@ -22,7 +22,7 @@ var (
 	// ErrNotFound reports that a requested resource does not exist.
 	// It is the parent of ErrObjectNotFound and ErrBucketNotFound; match it
 	// when any missing resource should be handled the same way.
-	ErrNotFound error = errors.New("trove: not found")
+	ErrNotFound = errors.New("trove: not found")
 
 	// ErrObjectNotFound reports that an object does not exist.
 	// It unwraps to ErrNotFound.
@@ -33,16 +33,16 @@ var (
 	ErrBucketNotFound error = &categoryError{msg: "trove: bucket not found", parent: ErrNotFound}
 
 	// ErrBucketExists reports that a bucket being created already exists.
-	ErrBucketExists error = errors.New("trove: bucket already exists")
+	ErrBucketExists = errors.New("trove: bucket already exists")
 
 	// ErrPermissionDenied reports that the credentials in use are not
 	// authorized for the operation. Retrying will not help until the
 	// credentials or the backend's access policy change.
-	ErrPermissionDenied error = errors.New("trove: permission denied")
+	ErrPermissionDenied = errors.New("trove: permission denied")
 
 	// ErrQuotaExceeded reports that a storage quota or rate limit was
 	// exceeded. Unlike ErrPermissionDenied, retrying later may succeed.
-	ErrQuotaExceeded error = errors.New("trove: quota exceeded")
+	ErrQuotaExceeded = errors.New("trove: quota exceeded")
 
 	// ErrInvalidPath reports that a bucket name or object key is not
 	// addressable — it is empty, contains a NUL byte, is rooted, or resolves
@@ -54,7 +54,7 @@ var (
 	// "the request is malformed" (HTTP 400) rather than "it isn't there"
 	// (404), which would both misdescribe the failure and let a client use
 	// rejected keys to probe what exists.
-	ErrInvalidPath error = errors.New("trove: invalid path")
+	ErrInvalidPath = errors.New("trove: invalid path")
 )
 
 // Permanent reports whether err describes a condition that retrying cannot
