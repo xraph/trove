@@ -6,7 +6,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.18.0
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.6.1
 	github.com/stretchr/testify v1.11.1
-	github.com/xraph/trove v0.0.0
+	github.com/xraph/trove v1.6.5
 )
 
 require (

@@ -13,7 +13,7 @@ require (
 	github.com/xraph/grove/drivers/mongodriver v1.6.2
 	github.com/xraph/grove/drivers/pgdriver v1.6.2
 	github.com/xraph/grove/drivers/sqlitedriver v1.6.2
-	github.com/xraph/trove v0.0.0
+	github.com/xraph/trove v1.6.5
 	github.com/xraph/vault v1.6.2
 	github.com/xraph/vessel v1.0.4
 	github.com/xraph/warden v1.6.3

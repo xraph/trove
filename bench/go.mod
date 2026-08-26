@@ -2,7 +2,7 @@ module github.com/xraph/trove/bench
 
 go 1.25.7
 
-require github.com/xraph/trove v0.0.0
+require github.com/xraph/trove v1.6.5
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
