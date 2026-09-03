@@ -5,16 +5,16 @@ go 1.26.0
 require (
 	github.com/a-h/templ v0.3.1020
 	github.com/xraph/chronicle v1.6.1
-	github.com/xraph/dispatch v1.6.0
-	github.com/xraph/forge v1.9.13
+	github.com/xraph/dispatch v1.6.5
+	github.com/xraph/forge v1.10.0
 	github.com/xraph/forgeui v1.4.1
-	github.com/xraph/go-utils v1.1.8
-	github.com/xraph/grove v1.6.2
-	github.com/xraph/grove/drivers/mongodriver v1.6.2
-	github.com/xraph/grove/drivers/pgdriver v1.6.2
-	github.com/xraph/grove/drivers/sqlitedriver v1.6.2
+	github.com/xraph/go-utils v1.2.2
+	github.com/xraph/grove v1.6.3
+	github.com/xraph/grove/drivers/mongodriver v1.6.3
+	github.com/xraph/grove/drivers/pgdriver v1.6.3
+	github.com/xraph/grove/drivers/sqlitedriver v1.6.3
 	github.com/xraph/trove v1.6.5
-	github.com/xraph/vault v1.6.2
+	github.com/xraph/vault v1.6.3
 	github.com/xraph/vessel v1.0.4
 	github.com/xraph/warden v1.6.3
 	go.mongodb.org/mongo-driver/v2 v2.8.0
@@ -132,7 +132,7 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
-	google.golang.org/grpc v1.83.0 // indirect
+	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
