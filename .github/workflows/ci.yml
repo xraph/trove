@@ -102,7 +102,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          # Each driver declares its own minimum, so read the version from the
+          # module being built rather than from the root. sftpdriver needs
+          # 1.26.0 for x/crypto v0.56.0 while the root still declares 1.25.7,
+          # and a toolchain older than the module asks for either downloads a
+          # second one mid-job or fails outright, depending on GOTOOLCHAIN.
+          go-version-file: drivers/${{ matrix.driver }}/go.mod
           cache: true
           cache-dependency-path: drivers/${{ matrix.driver }}/go.sum
 

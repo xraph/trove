@@ -17,10 +17,13 @@
 #
 # Format: <driver> <OSV-ID>
 #
-# Audited 2026-08-14 against govulncheck v1.6.0. Absent from this file, and
+# Audited 2026-09-02 against govulncheck v1.6.0. Absent from this file, and
 # passing on their own: root, extension, sftpdriver. sftpdriver's x/crypto/ssh
-# findings were reachable through ssh.Dial and ssh.ParsePrivateKey in Open,
-# and were fixed by bumping to v0.52.0 rather than being listed here.
+# findings keep landing reachable through ssh.Dial and ssh.ParsePrivateKey in
+# Open, and keep getting fixed by bumping rather than being listed here:
+# v0.52.0 in August, then v0.56.0 for GO-2026-6354 and GO-2026-6355. That bump
+# is also why sftpdriver declares go 1.26.0 while its sibling drivers are on
+# 1.25.7, since x/crypto v0.56.0 requires it.
 
 # gcsdriver — all indirect, via cloud.google.com/go/storage's dependency tree.
 gcsdriver GO-2026-6061   # grpc: xDS RBAC + HTTP/2 server. Needs grpc v1.82.1.

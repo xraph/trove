@@ -1,12 +1,12 @@
 module github.com/xraph/trove/drivers/sftpdriver
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/pkg/sftp v1.13.7
 	github.com/stretchr/testify v1.11.1
 	github.com/xraph/trove v1.6.5
-	golang.org/x/crypto v0.52.0
+	golang.org/x/crypto v0.56.0
 )
 
 require (
