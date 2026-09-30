@@ -66,6 +66,9 @@ func bindings(deps Deps) []binding {
 		command("buckets.delete", bucketsDeleteHandler(deps)),
 		query("objects.list", objectsListHandler(deps)),
 		query("objects.head", objectsHeadHandler(deps)),
+		command("objects.delete", objectsDeleteHandler(deps)),
+		command("objects.copy", objectsCopyHandler(deps)),
+		command("objects.presign", objectsPresignHandler(deps)),
 	}
 }
 

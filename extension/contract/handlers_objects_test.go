@@ -207,12 +207,12 @@ func TestObjectsHead_Missing(t *testing.T) {
 // presignMem is a memdriver that claims it can presign.
 type presignMem struct{ *memdriver.MemDriver }
 
-func (presignMem) PresignGet(context.Context, string, string, time.Duration) (string, error) {
-	return "https://example.test/get", nil
+func (presignMem) PresignGet(_ context.Context, bucket, key string, _ time.Duration) (string, error) {
+	return "https://signed.example/" + bucket + "/" + key, nil
 }
 
-func (presignMem) PresignPut(context.Context, string, string, time.Duration) (string, error) {
-	return "https://example.test/put", nil
+func (presignMem) PresignPut(_ context.Context, bucket, key string, _ time.Duration) (string, error) {
+	return "https://signed.example/put/" + bucket + "/" + key, nil
 }
 
 // TestObjectsHead_PresignJudgesTheRoutedDriver gives the Trove a presign
