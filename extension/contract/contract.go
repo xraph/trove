@@ -69,6 +69,9 @@ func bindings(deps Deps) []binding {
 		command("objects.delete", objectsDeleteHandler(deps)),
 		command("objects.copy", objectsCopyHandler(deps)),
 		command("objects.presign", objectsPresignHandler(deps)),
+		query("objects.contentUrl", objectsContentURLHandler(deps)),
+		command("objects.beginUpload", objectsBeginUploadHandler(deps)),
+		command("objects.completeUpload", objectsCompleteUploadHandler(deps)),
 	}
 }
 
