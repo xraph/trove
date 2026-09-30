@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/xraph/trove"
+	"github.com/xraph/trove/cas"
 	"github.com/xraph/trove/driver"
 	"github.com/xraph/trove/drivers/localdriver"
 	"github.com/xraph/trove/drivers/memdriver"
@@ -139,4 +140,26 @@ func TestBucketsDelete_ChecksTheDriverItDeletesFrom(t *testing.T) {
 	if codeOf(err) != "CONFLICT" {
 		t.Fatalf("delete = %v, want CONFLICT because the default driver holds a.txt", err)
 	}
+}
+
+// TestBucketsDelete_RefusesTheCASBucket deletes the CAS bucket while it is
+// still empty, which the emptiness check alone would allow.
+func TestBucketsDelete_RefusesTheCASBucket(t *testing.T) {
+	tv := openMem(t, trove.WithCAS(cas.AlgSHA256))
+	mustBucket(t, tv, "cas")
+	deps := testDeps(t, newStores(tv))
+	_, err := bucketsDeleteHandler(deps)(context.Background(), bucketInput{Name: "cas"}, principalFor("u"))
+	if codeOf(err) != "CONFLICT" {
+		t.Fatalf("delete of the CAS bucket = %v, want CONFLICT", err)
+	}
+	list, err := tv.ListBuckets(context.Background())
+	if err != nil {
+		t.Fatalf("list buckets: %v", err)
+	}
+	for _, b := range list {
+		if b.Name == "cas" {
+			return
+		}
+	}
+	t.Fatalf("buckets = %+v, the CAS bucket is gone after a refused delete", list)
 }

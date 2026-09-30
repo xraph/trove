@@ -34,10 +34,10 @@ type capabilities struct {
 }
 
 type statusConfig struct {
-	DefaultBucket  string `json:"defaultBucket"`
-	ChunkSize      int64  `json:"chunkSize"`
-	PoolSize       int    `json:"poolSize"`
-	MaxUploadBytes int64  `json:"maxUploadBytes"`
+	DefaultBucket  *string `json:"defaultBucket"`
+	ChunkSize      int64   `json:"chunkSize"`
+	PoolSize       int     `json:"poolSize"`
+	MaxUploadBytes int64   `json:"maxUploadBytes"`
 }
 
 // flagStatus compares what an operator configured with what the resolver
@@ -59,6 +59,23 @@ type systemStatus struct {
 	Flags             []flagStatus `json:"flags"`
 	EtagIsContentHash bool         `json:"etagIsContentHash"`
 	ContentSecret     string       `json:"contentSecret"`
+	// Backends names the backends registered beside the default, sorted.
+	// The default has no name and is not listed, so [] means every key
+	// goes to the default.
+	Backends []string `json:"backends"`
+	// RoutingNote is set when Backends is not empty and says what the
+	// other answers cover. It is null otherwise.
+	RoutingNote *string `json:"routingNote"`
+}
+
+// routingNote is what system.status says about a store that routes keys to
+// more than one backend.
+const routingNote = "This store routes some keys to other backends. Listings, bucket operations and health describe the default backend only."
+
+// isRouted reports whether t has a backend besides its default, so a
+// listing or a health check of the default may not describe every key.
+func isRouted(t *trove.Trove) bool {
+	return len(t.Backends()) > 0
 }
 
 func systemStatusHandler(deps Deps) func(context.Context, storeInput, contract.Principal) (systemStatus, error) {
@@ -93,6 +110,10 @@ func systemStatusHandler(deps Deps) func(context.Context, storeInput, contract.P
 		if deps.Content.PerProcessSecret {
 			secret = "per-process"
 		}
+		var note *string
+		if isRouted(t) {
+			note = optString(routingNote)
+		}
 
 		return systemStatus{
 			Store:  st.Name,
@@ -104,7 +125,7 @@ func systemStatusHandler(deps Deps) func(context.Context, storeInput, contract.P
 				Folders: driverFolds(name),
 			},
 			Config: statusConfig{
-				DefaultBucket:  cfg.DefaultBucket,
+				DefaultBucket:  optString(cfg.DefaultBucket),
 				ChunkSize:      cfg.ChunkSize,
 				PoolSize:       cfg.PoolSize,
 				MaxUploadBytes: deps.Content.MaxUploadBytes,
@@ -112,6 +133,8 @@ func systemStatusHandler(deps Deps) func(context.Context, storeInput, contract.P
 			Flags:             protectionFlags(t, st.Configured),
 			EtagIsContentHash: etagIsContentHash(name),
 			ContentSecret:     secret,
+			Backends:          t.Backends(),
+			RoutingNote:       note,
 		}, nil
 	}
 }

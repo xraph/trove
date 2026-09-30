@@ -69,8 +69,8 @@ func bucketsCreateHandler(deps Deps) func(context.Context, bucketInput, contract
 	}
 }
 
-// bucketsDeleteHandler refuses a bucket that might still hold anything, on
-// every driver. local, mem, sftp and azure would delete it recursively and s3
+// bucketsDeleteHandler refuses the CAS bucket, even empty, and any bucket
+// that might still hold anything, on every driver. local, mem, sftp and azure would delete it recursively and s3
 // and gcs would refuse with an unclassified error, so the check here is what
 // makes the behaviour the same everywhere. It asks the default driver
 // directly, because that is the driver Trove.DeleteBucket acts on; Trove.List
@@ -86,6 +86,10 @@ func bucketsDeleteHandler(deps Deps) func(context.Context, bucketInput, contract
 			return bucketNameOutput{}, err
 		}
 		st, err := deps.Stores.Resolve(in.Store)
+		if err != nil {
+			return bucketNameOutput{}, err
+		}
+		err = refuseCASBucket(st.Trove, in.Name)
 		if err != nil {
 			return bucketNameOutput{}, err
 		}

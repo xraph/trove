@@ -251,3 +251,38 @@ func TestObjectsHead_PresignJudgesTheRoutedDriver(t *testing.T) {
 		t.Fatalf("default key presign = %+v, want available", direct.Presign)
 	}
 }
+
+// TestObjectsList_SaysWhenTheStoreIsRouted routes *.log to a second
+// backend. The listing reads the default only, so app.log is missing from
+// it, and routed is what tells the page the listing may be partial.
+func TestObjectsList_SaysWhenTheStoreIsRouted(t *testing.T) {
+	plain := openMem(t)
+	mustBucket(t, plain, "data")
+	out, err := objectsListHandler(testDeps(t, newStores(plain)))(context.Background(), objectsListInput{Bucket: "data"}, principalFor("u"))
+	if err != nil || out.Routed {
+		t.Fatalf("unrouted listing = %+v, %v; want routed false", out, err)
+	}
+
+	archive := memdriver.New()
+	if err = archive.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	if err = archive.CreateBucket(context.Background(), "data"); err != nil {
+		t.Fatalf("create bucket on the archive: %v", err)
+	}
+	tv := openMem(t, trove.WithBackend("archive", archive), trove.WithRoute("*.log", "archive"))
+	mustBucket(t, tv, "data")
+	put(t, tv, "data", "app.txt", "x")
+	put(t, tv, "data", "app.log", "y")
+	out, err = objectsListHandler(testDeps(t, newStores(tv)))(context.Background(), objectsListInput{Bucket: "data"}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !out.Routed {
+		t.Fatalf("routed listing = %+v, want routed true", out)
+	}
+	raw, _ := json.Marshal(out)
+	if !strings.Contains(string(raw), `"routed":true`) {
+		t.Fatalf("wire = %s, want routed true", raw)
+	}
+}

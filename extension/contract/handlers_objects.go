@@ -46,6 +46,13 @@ type objectsListOutput struct {
 	// driver folded keys into prefixes. It is false for a flat listing,
 	// and false if a driver returned keys it should have folded.
 	FoldersSupported bool `json:"foldersSupported"`
+	// Routed is true when the store has a backend besides its default.
+	// When it is true the listing covers the default backend only (or the
+	// one backend a route function assigns the whole bucket to) and may
+	// omit objects served elsewhere, even when nextCursor is null: Trove
+	// lists a bucket on one backend, and key pattern routes send single
+	// keys to others.
+	Routed bool `json:"routed"`
 }
 
 func objectsListHandler(deps Deps) func(context.Context, objectsListInput, contract.Principal) (objectsListOutput, error) {
@@ -108,6 +115,7 @@ func objectsListHandler(deps Deps) func(context.Context, objectsListInput, contr
 			out.Prefixes = append([]string{}, it.CommonPrefixes()...)
 		}
 		out.FoldersSupported = folded
+		out.Routed = isRouted(st.Trove)
 		return out, nil
 	}
 }
@@ -180,10 +188,10 @@ func objectsHeadHandler(deps Deps) func(context.Context, objectKeyInput, contrac
 	}
 }
 
-// refuseCASBucket refuses a write or delete in the CAS bucket. CAS owns
-// that bucket's keys and its index points at them: deleting one leaves the
-// index pointing at nothing, and writing one plants content the index
-// never heard of.
+// refuseCASBucket refuses a write, a delete or a copy out of the CAS
+// bucket, and deleting the bucket itself. CAS owns that bucket's keys and
+// its index points at them: deleting one leaves the index pointing at
+// nothing, and writing one plants content the index never heard of.
 func refuseCASBucket(t *trove.Trove, bucket string) error {
 	if b, ok := casBucket(t); ok && b == bucket {
 		return conflict("CAS manages the " + b + " bucket. Changing its objects here would leave the CAS index pointing at the wrong content.")
@@ -265,9 +273,14 @@ func objectsCopyHandler(deps Deps) func(context.Context, objectsCopyInput, contr
 			return objectRow{}, err
 		}
 		t := st.Trove
-		err = refuseCASBucket(t, in.DstBucket)
-		if err != nil {
-			return objectRow{}, err
+		// Refuse both ends. A copy into the CAS bucket plants content its
+		// index never heard of, and a CAS blob never ran middleware, so a
+		// copy out of it lands as raw bytes where a scoped middleware may
+		// expect to decode them.
+		for _, b := range []string{in.SrcBucket, in.DstBucket} {
+			if casErr := refuseCASBucket(t, b); casErr != nil {
+				return objectRow{}, casErr
+			}
 		}
 		if _, err = t.Head(ctx, in.SrcBucket, in.SrcKey); err != nil {
 			return objectRow{}, deps.mapError("objects.copy", err)

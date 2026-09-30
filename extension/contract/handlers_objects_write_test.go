@@ -339,3 +339,24 @@ func TestObjectsPresign_FailureLogSaysWhichObject(t *testing.T) {
 		}
 	}
 }
+
+// TestObjectsCopy_RefusesACASSource copies a CAS blob out. CAS blobs never
+// ran middleware, so the copy would be stored bytes that a scoped
+// middleware at the destination could not read back.
+func TestObjectsCopy_RefusesACASSource(t *testing.T) {
+	tv := openMem(t, trove.WithCAS(cas.AlgSHA256))
+	mustBucket(t, tv, "cas")
+	mustBucket(t, tv, "data")
+	hash, _, err := tv.CAS().Store(context.Background(), strings.NewReader("blob"))
+	if err != nil {
+		t.Fatalf("cas store: %v", err)
+	}
+	_, err = objectsCopyHandler(testDeps(t, newStores(tv)))(context.Background(),
+		objectsCopyInput{SrcBucket: "cas", SrcKey: hash, DstBucket: "data", DstKey: "blob.bin"}, principalFor("u"))
+	if codeOf(err) != "CONFLICT" {
+		t.Fatalf("copy out of the CAS bucket = %v, want CONFLICT", err)
+	}
+	if _, headErr := tv.Head(context.Background(), "data", "blob.bin"); headErr == nil {
+		t.Fatal("the refused copy wrote the object anyway")
+	}
+}

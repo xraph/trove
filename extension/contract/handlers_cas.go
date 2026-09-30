@@ -77,9 +77,11 @@ type casListOutput struct {
 	NextCursor *string       `json:"nextCursor"`
 }
 
-// casListHandler lists the CAS bucket through the routed driver and joins
-// each blob to the index. A blob the index does not know is `indexed: false`,
-// which is how a restart shows up.
+// casListHandler lists the CAS bucket on the default driver and joins each
+// blob to the index. CAS writes through the default driver whatever the
+// routes say, so Trove.List, which routes by bucket, could read a backend
+// that holds none of its blobs. A blob the index does not know is
+// `indexed: false`, which is how a restart shows up.
 func casListHandler(deps Deps) func(context.Context, casListInput, contract.Principal) (casListOutput, error) {
 	return func(ctx context.Context, in casListInput, _ contract.Principal) (casListOutput, error) {
 		c, st, err := requireCAS(deps, in.Store)
@@ -102,7 +104,7 @@ func casListHandler(deps Deps) func(context.Context, casListInput, contract.Prin
 			opts = append(opts, driver.WithCursor(token))
 		}
 		out := casListOutput{Entries: []casEntryRow{}}
-		it, err := st.Trove.List(ctx, c.Bucket(), opts...)
+		it, err := st.Trove.Driver().List(ctx, c.Bucket(), opts...)
 		if errors.Is(err, driver.ErrBucketNotFound) {
 			// The extension never creates the CAS bucket; until something
 			// is stored there is nothing to list.

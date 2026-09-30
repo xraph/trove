@@ -3,11 +3,13 @@ package contract
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
+	"github.com/xraph/trove/drivers/memdriver"
 	"github.com/xraph/trove/middleware"
 	"github.com/xraph/trove/middleware/compress"
 	"github.com/xraph/trove/middleware/encrypt"
@@ -179,5 +181,51 @@ func TestSystemStatus_ScopedScanningKeepsItsCaveat(t *testing.T) {
 	f := flagByName(t, s, "scanning")
 	if !f.Applied || f.Note == nil || !strings.Contains(*f.Note, "bucket(uploads)") || !strings.Contains(*f.Note, "nothing records which objects were scanned") {
 		t.Fatalf("scanning = %+v (note %v)", f, f.Note)
+	}
+}
+
+func TestSystemStatus_DefaultBucketIsNullWhenUnset(t *testing.T) {
+	s, err := systemStatusHandler(testDeps(t, newStores(openMem(t))))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	if s.Config.DefaultBucket != nil {
+		t.Fatalf("defaultBucket = %q, want null when none is configured", *s.Config.DefaultBucket)
+	}
+	raw, err := json.Marshal(s.Config)
+	if err != nil || !strings.Contains(string(raw), `"defaultBucket":null`) {
+		t.Fatalf("config = %s (%v), want defaultBucket null", raw, err)
+	}
+
+	named, err := systemStatusHandler(testDeps(t, newStores(openMem(t, trove.WithDefaultBucket("primary")))))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil || named.Config.DefaultBucket == nil || *named.Config.DefaultBucket != "primary" {
+		t.Fatalf("defaultBucket with one configured = %v, %v", named.Config.DefaultBucket, err)
+	}
+}
+
+func TestSystemStatus_SaysWhenAStoreIsRouted(t *testing.T) {
+	plain, err := systemStatusHandler(testDeps(t, newStores(openMem(t))))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	if plain.Backends == nil || len(plain.Backends) != 0 || plain.RoutingNote != nil {
+		t.Fatalf("unrouted = backends %v, note %v; want [] and null", plain.Backends, plain.RoutingNote)
+	}
+
+	archive := memdriver.New()
+	if err = archive.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	tv := openMem(t, trove.WithBackend("archive", archive), trove.WithRoute("*.log", "archive"))
+	routed, err := systemStatusHandler(testDeps(t, newStores(tv)))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	if len(routed.Backends) != 1 || routed.Backends[0] != "archive" {
+		t.Fatalf("backends = %v, want [archive]", routed.Backends)
+	}
+	want := "This store routes some keys to other backends. Listings, bucket operations and health describe the default backend only."
+	if routed.RoutingNote == nil || *routed.RoutingNote != want {
+		t.Fatalf("routingNote = %v, want %q", routed.RoutingNote, want)
 	}
 }
