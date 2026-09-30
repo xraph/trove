@@ -324,3 +324,18 @@ func TestList(t *testing.T) {
 	assert.Len(t, objects, 1)
 	assert.Equal(t, "a.txt", objects[0].Key)
 }
+
+func TestDriverFor(t *testing.T) {
+	def := memdriver.New()
+	archive := memdriver.New()
+
+	tr, err := trove.Open(def,
+		trove.WithBackend("archive", archive),
+		trove.WithRoute("*.log", "archive"),
+	)
+	require.NoError(t, err)
+
+	assert.Same(t, archive, tr.DriverFor("data", "app.log"), "a matching key is served by the routed backend")
+	assert.Same(t, def, tr.DriverFor("data", "app.txt"), "a non-matching key is served by the default")
+	assert.Same(t, def, tr.Driver(), "Driver stays the default")
+}

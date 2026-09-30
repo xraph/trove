@@ -232,6 +232,13 @@ func (t *Trove) Driver() driver.Driver {
 	return t.driver
 }
 
+// DriverFor returns the driver that serves bucket and key, after routing.
+// Driver returns only the default; an object routed elsewhere is served by
+// this one.
+func (t *Trove) DriverFor(bucket, key string) driver.Driver {
+	return t.router.Resolve(bucket, key)
+}
+
 // Config returns a copy of the current configuration.
 func (t *Trove) Config() Config {
 	return t.config
