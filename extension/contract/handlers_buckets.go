@@ -69,11 +69,17 @@ func bucketsCreateHandler(deps Deps) func(context.Context, bucketInput, contract
 	}
 }
 
-// bucketsDeleteHandler refuses a bucket that still holds anything, on every
-// driver. local, mem, sftp and azure would delete it recursively and s3 and
-// gcs would refuse with an unclassified error, so the check here is what
-// makes the behaviour the same everywhere. Something written between the
-// check and the delete can still be lost on the recursive drivers.
+// bucketsDeleteHandler refuses a bucket that might still hold anything, on
+// every driver. local, mem, sftp and azure would delete it recursively and s3
+// and gcs would refuse with an unclassified error, so the check here is what
+// makes the behaviour the same everywhere. It asks the default driver
+// directly, because that is the driver Trove.DeleteBucket acts on; Trove.List
+// would route by bucket and could read a different backend. A listing that
+// shows nothing but returns a continuation token counts as non-empty, since
+// a driver may return an empty page with more to come. The local driver
+// hides its *.meta.json and .trove-tmp-* files from listings, so a bucket
+// holding only those looks empty and is deleted. Something written between
+// the check and the delete can also be lost on the recursive drivers.
 func bucketsDeleteHandler(deps Deps) func(context.Context, bucketInput, contract.Principal) (bucketNameOutput, error) {
 	return func(ctx context.Context, in bucketInput, _ contract.Principal) (bucketNameOutput, error) {
 		if err := requireName("name", in.Name); err != nil {
@@ -83,7 +89,7 @@ func bucketsDeleteHandler(deps Deps) func(context.Context, bucketInput, contract
 		if err != nil {
 			return bucketNameOutput{}, err
 		}
-		it, err := st.Trove.List(ctx, in.Name, driver.WithMaxKeys(1), driver.WithDelimiter("/"))
+		it, err := st.Trove.Driver().List(ctx, in.Name, driver.WithMaxKeys(1), driver.WithDelimiter("/"))
 		if err != nil {
 			return bucketNameOutput{}, deps.mapError("buckets.delete", err)
 		}
@@ -91,7 +97,7 @@ func bucketsDeleteHandler(deps Deps) func(context.Context, bucketInput, contract
 		if err != nil {
 			return bucketNameOutput{}, deps.mapError("buckets.delete", err)
 		}
-		if len(objects) > 0 || len(it.CommonPrefixes()) > 0 {
+		if len(objects) > 0 || len(it.CommonPrefixes()) > 0 || it.NextToken() != "" {
 			return bucketNameOutput{}, conflict("This bucket still holds objects. Delete them first.")
 		}
 		if err := st.Trove.DeleteBucket(ctx, in.Name); err != nil {

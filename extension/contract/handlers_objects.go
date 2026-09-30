@@ -115,12 +115,14 @@ type presignStatus struct {
 	Reason    *string `json:"reason"`
 }
 
-// presignAvailability offers a presigned link only when the driver can sign
-// one and no middleware applies to the key. A presigned link talks to the
+// presignAvailability offers a presigned link only when the driver that
+// serves the key can sign one and no middleware applies to it. The driver is
+// the routed one, not the default, because a route can send this key to a
+// backend with different abilities. A presigned link talks to the
 // backend directly, so it would skip encrypt, compress and scan on the way
 // in and return stored bytes on the way out.
-func presignAvailability(t *trove.Trove, rows []middlewareRow) presignStatus {
-	if _, ok := t.Driver().(driver.PresignDriver); !ok {
+func presignAvailability(t *trove.Trove, bucket, key string, rows []middlewareRow) presignStatus {
+	if _, ok := t.DriverFor(bucket, key).(driver.PresignDriver); !ok {
 		return presignStatus{Reason: optString("This driver cannot create presigned links.")}
 	}
 	if len(rows) > 0 {
@@ -169,7 +171,7 @@ func objectsHeadHandler(deps Deps) func(context.Context, objectKeyInput, contrac
 		return objectsHeadOutput{
 			Object:     projectObjectDetail(info),
 			Middleware: rows,
-			Presign:    presignAvailability(st.Trove, rows),
+			Presign:    presignAvailability(st.Trove, in.Bucket, in.Key, rows),
 		}, nil
 	}
 }

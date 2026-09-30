@@ -3,11 +3,14 @@ package contract
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/driver"
+	"github.com/xraph/trove/drivers/memdriver"
 	"github.com/xraph/trove/middleware/compress"
 )
 
@@ -113,17 +116,30 @@ func TestObjectsList_BadInput(t *testing.T) {
 	}
 }
 
+// TestObjectsList_LimitClamps seeds one more key than the cap so a missing
+// clamp shows: without it the limit of 5000 would return all 1001.
 func TestObjectsList_LimitClamps(t *testing.T) {
 	tv := openMem(t)
-	seedListing(t, tv)
-	deps := testDeps(t, newStores(tv))
-	out, err := objectsListHandler(deps)(context.Background(), objectsListInput{Bucket: "data", Limit: 5000, Delimiter: strPtr("")}, principalFor("u"))
-	if err != nil || len(out.Objects) != 5 {
-		t.Fatalf("limit 5000 = %+v, %v", out, err)
+	mustBucket(t, tv, "many")
+	for i := 0; i < 1001; i++ {
+		put(t, tv, "many", fmt.Sprintf("k%04d", i), "x")
 	}
-	out, err = objectsListHandler(deps)(context.Background(), objectsListInput{Bucket: "data", Limit: -3, Delimiter: strPtr("")}, principalFor("u"))
-	if err != nil || len(out.Objects) != 5 {
-		t.Fatalf("limit -3 = %+v, %v; want the default of 100", out, err)
+	deps := testDeps(t, newStores(tv))
+	ctx := context.Background()
+
+	out, err := objectsListHandler(deps)(ctx, objectsListInput{Bucket: "many", Limit: 5000, Delimiter: strPtr("")}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("limit 5000: %v", err)
+	}
+	if len(out.Objects) != 1000 || out.NextCursor == nil {
+		t.Fatalf("limit 5000 returned %d objects, nextCursor %v; want exactly 1000 and a cursor", len(out.Objects), out.NextCursor)
+	}
+	out, err = objectsListHandler(deps)(ctx, objectsListInput{Bucket: "many", Limit: -3, Delimiter: strPtr("")}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("limit -3: %v", err)
+	}
+	if len(out.Objects) != 100 {
+		t.Fatalf("limit -3 returned %d objects, want the default of 100", len(out.Objects))
 	}
 }
 
@@ -185,5 +201,53 @@ func TestObjectsHead_Missing(t *testing.T) {
 	}
 	if _, err := objectsHeadHandler(deps)(context.Background(), objectKeyInput{Bucket: "data"}, principalFor("u")); codeOf(err) != "BAD_REQUEST" {
 		t.Fatalf("head without key = %v", err)
+	}
+}
+
+// presignMem is a memdriver that claims it can presign.
+type presignMem struct{ *memdriver.MemDriver }
+
+func (presignMem) PresignGet(context.Context, string, string, time.Duration) (string, error) {
+	return "https://example.test/get", nil
+}
+
+func (presignMem) PresignPut(context.Context, string, string, time.Duration) (string, error) {
+	return "https://example.test/put", nil
+}
+
+// TestObjectsHead_PresignJudgesTheRoutedDriver gives the Trove a presign
+// capable default and routes *.log to a plain backend. The default can sign,
+// so judging it would wrongly offer a link for the routed key.
+func TestObjectsHead_PresignJudgesTheRoutedDriver(t *testing.T) {
+	def := presignMem{memdriver.New()}
+	if err := def.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open default: %v", err)
+	}
+	plain := memdriver.New()
+	if err := plain.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open plain: %v", err)
+	}
+	tv := openTrove(t, def, trove.WithBackend("plain", plain), trove.WithRoute("*.log", "plain"))
+	mustBucket(t, tv, "data")
+	if err := plain.CreateBucket(context.Background(), "data"); err != nil {
+		t.Fatalf("create bucket on the routed backend: %v", err)
+	}
+	put(t, tv, "data", "app.log", "line")
+	put(t, tv, "data", "app.txt", "text")
+	deps := testDeps(t, newStores(tv))
+
+	routed, err := objectsHeadHandler(deps)(context.Background(), objectKeyInput{Bucket: "data", Key: "app.log"}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("head routed: %v", err)
+	}
+	if routed.Presign.Available || routed.Presign.Reason == nil || !strings.Contains(*routed.Presign.Reason, "cannot create presigned links") {
+		t.Fatalf("routed key presign = %+v, want unavailable because the plain backend cannot sign", routed.Presign)
+	}
+	direct, err := objectsHeadHandler(deps)(context.Background(), objectKeyInput{Bucket: "data", Key: "app.txt"}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("head default: %v", err)
+	}
+	if !direct.Presign.Available {
+		t.Fatalf("default key presign = %+v, want available", direct.Presign)
 	}
 }
