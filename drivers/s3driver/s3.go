@@ -368,19 +368,25 @@ func (d *S3Driver) List(ctx context.Context, bucket string, opts ...driver.ListO
 		return nil, err
 	}
 
-	input := &s3.ListObjectsV2Input{
-		Bucket:  aws.String(bucket),
-		MaxKeys: aws.Int32(int32(cfg.MaxKeys)),
+	maxKeys := cfg.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 1000
 	}
 
+	input := &s3.ListObjectsV2Input{
+		Bucket:  aws.String(bucket),
+		MaxKeys: aws.Int32(int32(maxKeys)),
+	}
 	if cfg.Prefix != "" {
 		input.Prefix = aws.String(cfg.Prefix)
 	}
 	if cfg.Delimiter != "" {
 		input.Delimiter = aws.String(cfg.Delimiter)
 	}
+	// The cursor is the NextContinuationToken of the previous page. It is
+	// opaque, so it goes back as ContinuationToken, never as StartAfter.
 	if cfg.Cursor != "" {
-		input.StartAfter = aws.String(cfg.Cursor)
+		input.ContinuationToken = aws.String(cfg.Cursor)
 	}
 
 	result, err := client.ListObjectsV2(ctx, input)
@@ -423,12 +429,20 @@ func (d *S3Driver) List(ctx context.Context, bucket string, opts ...driver.ListO
 		return infos[i].Key < infos[j].Key
 	})
 
+	prefixes := make([]string, 0, len(result.CommonPrefixes))
+	for _, cp := range result.CommonPrefixes {
+		if cp.Prefix != nil {
+			prefixes = append(prefixes, *cp.Prefix)
+		}
+	}
+	sort.Strings(prefixes)
+
 	nextToken := ""
 	if result.NextContinuationToken != nil {
 		nextToken = *result.NextContinuationToken
 	}
 
-	return driver.NewObjectIterator(infos, nextToken), nil
+	return driver.NewObjectIteratorWithPrefixes(infos, prefixes, nextToken), nil
 }
 
 // Copy copies an object within or across buckets.
