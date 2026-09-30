@@ -1,0 +1,36 @@
+schemaVersion: 1
+contributor:
+  name: trove
+  envelope:
+    supports: [v1]
+    preferred: v1
+  capabilities: [trove.read, trove.write]
+
+# Every intent takes an optional `store`. Trove has no tenancy on the
+# driver path, so no intent takes a tenant or an app id: this dashboard is
+# operator-wide. Object content never travels in this envelope. The content
+# intents mint signed tickets and the bytes go through the content route.
+intents:
+  - { name: system.status,      kind: query, version: 1, capability: read }
+  - { name: stores.list,        kind: query, version: 1, capability: read }
+  - { name: buckets.list,       kind: query, version: 1, capability: read }
+  - { name: objects.list,       kind: query, version: 1, capability: read }
+  - { name: objects.head,       kind: query, version: 1, capability: read }
+  - { name: objects.contentUrl, kind: query, version: 1, capability: read }
+  - { name: middleware.list,    kind: query, version: 1, capability: read }
+  - { name: cas.status,         kind: query, version: 1, capability: read }
+  - { name: cas.list,           kind: query, version: 1, capability: read }
+  - { name: streams.list,       kind: query, version: 1, capability: read }
+  - { name: buckets.create,         kind: command, version: 1, capability: write, invalidates: [buckets.list] }
+  - { name: buckets.delete,         kind: command, version: 1, capability: write, invalidates: [buckets.list, objects.list] }
+  - { name: objects.delete,         kind: command, version: 1, capability: write, invalidates: [objects.list, objects.head, cas.list] }
+  - { name: objects.copy,           kind: command, version: 1, capability: write, invalidates: [objects.list, objects.head] }
+  # beginUpload writes nothing: it mints an upload ticket. The listing
+  # refreshes when completeUpload runs after the bytes have landed.
+  - { name: objects.beginUpload,    kind: command, version: 1, capability: write }
+  - { name: objects.completeUpload, kind: command, version: 1, capability: write, invalidates: [objects.list, objects.head] }
+  # presign writes nothing: it mints a share link.
+  - { name: objects.presign,        kind: command, version: 1, capability: write }
+  - { name: cas.pin,                kind: command, version: 1, capability: write, invalidates: [cas.list] }
+  - { name: cas.unpin,              kind: command, version: 1, capability: write, invalidates: [cas.list] }
+  - { name: cas.gc,                 kind: command, version: 1, capability: write, invalidates: [cas.list, cas.status] }
