@@ -168,7 +168,9 @@ type ListConfig struct {
 	// MaxKeys is the maximum number of objects to return.
 	MaxKeys int
 
-	// Cursor is the pagination cursor from a previous List call.
+	// Cursor is the NextToken from a previous List call, passed back
+	// unchanged. It is opaque: drivers may use a key, a backend
+	// continuation token or anything else, so never construct one.
 	Cursor string
 }
 

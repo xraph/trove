@@ -111,11 +111,17 @@ type BucketInfo struct {
 }
 
 // ObjectIterator provides cursor-based listing of objects.
+//
+// NextToken is opaque. Pass it back unchanged as the Cursor of the next
+// List call; an empty NextToken means the listing is complete. When the
+// List call set a Delimiter, CommonPrefixes holds the prefixes that keys
+// below them were folded into, and MaxKeys counted them alongside objects.
 type ObjectIterator struct {
-	objects []ObjectInfo
-	cursor  int
-	token   string
-	done    bool
+	objects  []ObjectInfo
+	prefixes []string
+	cursor   int
+	token    string
+	done     bool
 }
 
 // NewObjectIterator creates an iterator from a slice of objects and an optional
@@ -125,6 +131,22 @@ func NewObjectIterator(objects []ObjectInfo, nextToken string) *ObjectIterator {
 		objects: objects,
 		token:   nextToken,
 	}
+}
+
+// NewObjectIteratorWithPrefixes creates an iterator that also reports the
+// common prefixes a delimiter listing folded keys into.
+func NewObjectIteratorWithPrefixes(objects []ObjectInfo, prefixes []string, nextToken string) *ObjectIterator {
+	return &ObjectIterator{
+		objects:  objects,
+		prefixes: prefixes,
+		token:    nextToken,
+	}
+}
+
+// CommonPrefixes returns the prefixes this page folded keys into. It is
+// empty when the List call set no Delimiter.
+func (it *ObjectIterator) CommonPrefixes() []string {
+	return it.prefixes
 }
 
 // Next returns the next object in the iterator.
