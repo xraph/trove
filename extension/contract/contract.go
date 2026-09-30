@@ -72,6 +72,12 @@ func bindings(deps Deps) []binding {
 		query("objects.contentUrl", objectsContentURLHandler(deps)),
 		command("objects.beginUpload", objectsBeginUploadHandler(deps)),
 		command("objects.completeUpload", objectsCompleteUploadHandler(deps)),
+		query("cas.status", casStatusHandler(deps)),
+		query("cas.list", casListHandler(deps)),
+		command("cas.pin", casPinHandler(deps)),
+		command("cas.unpin", casUnpinHandler(deps)),
+		command("cas.gc", casGCHandler(deps)),
+		query("streams.list", streamsListHandler(deps)),
 	}
 }
 
