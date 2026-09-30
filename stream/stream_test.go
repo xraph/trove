@@ -2,6 +2,7 @@ package stream_test
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -229,4 +230,23 @@ func TestStreamState_IsTerminal(t *testing.T) {
 	assert.True(t, stream.StateCompleted.IsTerminal())
 	assert.True(t, stream.StateFailed.IsTerminal())
 	assert.True(t, stream.StateCancelled.IsTerminal())
+}
+
+func TestStream_TotalSizeUnknownUntilSet(t *testing.T) {
+	s, _ := newTestStream(t)
+	assert.Equal(t, int64(-1), s.TotalSize())
+
+	s.SetTotalSize(4096)
+	assert.Equal(t, int64(4096), s.TotalSize())
+}
+
+func TestStream_TotalSizeIsSafeUnderConcurrency(t *testing.T) {
+	s, _ := newTestStream(t)
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(2)
+		go func() { defer wg.Done(); s.SetTotalSize(int64(i)) }()
+		go func() { defer wg.Done(); _ = s.TotalSize() }()
+	}
+	wg.Wait()
 }

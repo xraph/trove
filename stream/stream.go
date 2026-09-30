@@ -188,7 +188,7 @@ type Stream struct {
 
 	// Offset tracking for resumable transfers.
 	offset    atomic.Int64
-	totalSize int64
+	totalSize atomic.Int64
 
 	// Channels.
 	chunks  chan *Chunk
@@ -224,7 +224,6 @@ func NewStream(
 		config:    cfg,
 		chunkPool: chunkPool,
 		metrics:   NewMetrics(),
-		totalSize: -1, // unknown until set
 		chunks:    make(chan *Chunk, cfg.channelSize),
 		ack:       make(chan ChunkAck, cfg.channelSize),
 		control:   make(chan ControlMsg, 4),
@@ -232,6 +231,7 @@ func NewStream(
 		cancel:    cancel,
 	}
 
+	s.totalSize.Store(-1) // unknown until set
 	s.state.Store(StateIdle)
 	s.bp = NewBackpressureHandler(cfg.backpressure, chunkPool)
 
@@ -241,7 +241,13 @@ func NewStream(
 // SetTotalSize sets the expected total size of the transfer. This enables
 // percentage-based progress reporting.
 func (s *Stream) SetTotalSize(n int64) {
-	s.totalSize = n
+	s.totalSize.Store(n)
+}
+
+// TotalSize returns the expected total size of the transfer, or -1 when
+// nobody has set it.
+func (s *Stream) TotalSize() int64 {
+	return s.totalSize.Load()
 }
 
 // --- State Machine ---
@@ -502,17 +508,18 @@ func (s *Stream) fireProgress() {
 	sent := s.metrics.BytesSent.Load()
 	recv := s.metrics.BytesRecv.Load()
 
+	total := s.totalSize.Load()
 	p := Progress{
 		StreamID:  s.ID,
 		BytesSent: sent,
 		BytesRecv: recv,
-		TotalSize: s.totalSize,
+		TotalSize: total,
 		Speed:     s.metrics.Throughput(),
 	}
 
-	if s.totalSize > 0 {
-		total := sent + recv
-		p.Percent = int(total * 100 / s.totalSize)
+	if total > 0 {
+		done := sent + recv
+		p.Percent = int(done * 100 / total)
 		if p.Percent > 100 {
 			p.Percent = 100
 		}

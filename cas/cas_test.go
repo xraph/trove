@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -322,4 +323,49 @@ func TestMemoryIndex_ListUnpinned(t *testing.T) {
 	assert.True(t, hashes["b"], "b should be unpinned (ref=0)")
 	assert.False(t, hashes["c"], "c is pinned")
 	assert.True(t, hashes["d"], "d should be unpinned (ref=0)")
+}
+
+func TestCAS_Bucket(t *testing.T) {
+	c := newTestCAS(t)
+	assert.Equal(t, "cas", c.Bucket())
+
+	custom := New(c.store, WithBucket("blobs"))
+	assert.Equal(t, "blobs", custom.Bucket())
+}
+
+func TestCAS_StatReportsRefCountWithoutReadingContent(t *testing.T) {
+	c := newTestCAS(t)
+	ctx := context.Background()
+
+	hash, _, err := c.Store(ctx, strings.NewReader("same bytes"))
+	require.NoError(t, err)
+	_, _, err = c.Store(ctx, strings.NewReader("same bytes"))
+	require.NoError(t, err)
+
+	entry, err := c.Stat(ctx, hash)
+	require.NoError(t, err)
+	assert.Equal(t, hash, entry.Hash)
+	assert.Equal(t, 2, entry.RefCount)
+	assert.False(t, entry.Pinned)
+}
+
+func TestCAS_StatUnknownHashIsNotFound(t *testing.T) {
+	c := newTestCAS(t)
+	_, err := c.Stat(context.Background(), "sha256:0000")
+	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestCAS_StatReturnsACopy(t *testing.T) {
+	c := newTestCAS(t)
+	ctx := context.Background()
+	hash, _, err := c.Store(ctx, strings.NewReader("x"))
+	require.NoError(t, err)
+
+	entry, err := c.Stat(ctx, hash)
+	require.NoError(t, err)
+	entry.RefCount = 99
+
+	again, err := c.Stat(ctx, hash)
+	require.NoError(t, err)
+	assert.Equal(t, 1, again.RefCount)
 }

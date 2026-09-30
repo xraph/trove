@@ -141,3 +141,22 @@ func (c *CAS) GC(ctx context.Context) (*GCResult, error) {
 func (c *CAS) Algorithm() HashAlgorithm {
 	return c.algorithm
 }
+
+// Bucket returns the bucket this CAS stores content in.
+func (c *CAS) Bucket() string {
+	return c.bucket
+}
+
+// Stat returns the index entry for a hash without reading its content.
+//
+// It returns ErrNotFound when the index has no entry. With the default
+// in-memory index that includes content still present in the bucket after
+// a restart, because the index does not survive one.
+func (c *CAS) Stat(ctx context.Context, hash string) (*Entry, error) {
+	entry, err := c.index.Get(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	cp := *entry
+	return &cp, nil
+}
