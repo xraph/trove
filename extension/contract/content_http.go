@@ -14,7 +14,6 @@ import (
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/driver"
-	"github.com/xraph/trove/middleware"
 )
 
 // Handler serves object content for tickets minted by the content intents.
@@ -44,8 +43,10 @@ func (h *contentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *contentHandler) ticket(w http.ResponseWriter, r *http.Request, ops ...string) (Ticket, *Store, bool) {
-	tk, err := h.content.Signer.Verify(r.URL.Query().Get("t"))
+// ticket verifies token, checks it allows one of ops and resolves its
+// store. On failure it has already answered.
+func (h *contentHandler) ticket(w http.ResponseWriter, token string, ops ...string) (Ticket, *Store, bool) {
+	tk, err := h.content.Signer.Verify(token)
 	switch {
 	case errors.Is(err, ErrTicketExpired):
 		h.writeContentError(w, http.StatusForbidden, "This link has expired. Request a new one.")
@@ -72,8 +73,11 @@ func (h *contentHandler) ticket(w http.ResponseWriter, r *http.Request, ops ...s
 	return tk, st, true
 }
 
+// serveGet takes its ticket from the query, so a plain <a download> link
+// works. Download and preview tickets are read-only and live 60 seconds;
+// they do show up in forge's traces, which record the query string.
 func (h *contentHandler) serveGet(w http.ResponseWriter, r *http.Request) {
-	tk, st, ok := h.ticket(w, r, OpDownload, OpPreview)
+	tk, st, ok := h.ticket(w, r.URL.Query().Get("t"), OpDownload, OpPreview)
 	if !ok {
 		return
 	}
@@ -102,14 +106,17 @@ func (h *contentHandler) serveGet(w http.ResponseWriter, r *http.Request) {
 	var body io.Reader = src
 	if tk.Op == OpPreview {
 		body = io.LimitReader(src, tk.Limit)
-	} else if obj.Info != nil && len(matching(r.Context(), st.Trove, tk.Bucket, tk.Key, middleware.DirectionRead)) == 0 {
+	} else if obj.Info != nil && len(st.Trove.Resolver().ResolveRead(r.Context(), tk.Bucket, tk.Key)) == 0 {
 		// The stored size is what is served only when nothing transforms
-		// it on the way out.
+		// it on the way out. Ask the resolver rather than evaluating the
+		// scopes afresh: it caches each key's pipeline, and the cached one
+		// is what Get just used.
 		hdr.Set("Content-Length", strconv.FormatInt(obj.Info.Size, 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	_, copyErr := io.Copy(w, body)
+	n, copyErr := io.Copy(w, body)
 	if copyErr == nil {
+		h.info("trove/contract: content read served", append(fields, forge.F("bytes", n))...)
 		return
 	}
 	if src.err == nil || r.Context().Err() != nil {
@@ -141,8 +148,17 @@ func (rr *recordingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// servePut takes its ticket from the X-Trove-Ticket header only. An upload
+// ticket lives 15 minutes and may allow an overwrite, and forge's tracing
+// records the query string, so a PUT that carries one in the URL is refused
+// even when the header is also set.
 func (h *contentHandler) servePut(w http.ResponseWriter, r *http.Request) {
-	tk, st, ok := h.ticket(w, r, OpUpload)
+	token := r.Header.Get(TicketHeader)
+	if r.URL.Query().Has("t") || token == "" {
+		h.writeContentError(w, http.StatusForbidden, "Upload tickets go in the "+TicketHeader+" header, never in the URL.")
+		return
+	}
+	tk, st, ok := h.ticket(w, token, OpUpload)
 	if !ok {
 		return
 	}

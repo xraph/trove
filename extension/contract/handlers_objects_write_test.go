@@ -2,10 +2,14 @@ package contract
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/xraph/go-utils/log"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
@@ -273,6 +277,65 @@ func TestObjectsCopy_MissingDestinationBucketCreatesNothingOnDisk(t *testing.T) 
 		}
 		if _, err := os.Stat(filepath.Join(root, "typo")); !os.IsNotExist(err) {
 			t.Fatalf("overwrite=%v: the typo directory exists (stat err %v)", overwrite, err)
+		}
+	}
+}
+
+func TestObjectsPresign_LogsTheLink(t *testing.T) {
+	tv := openPresign(t)
+	mustBucket(t, tv, "data")
+	put(t, tv, "data", "a.txt", "x")
+	deps := testDeps(t, newStores(tv))
+	logger := log.NewTestLogger()
+	deps.Logger = logger
+	out, err := objectsPresignHandler(deps)(context.Background(), objectsPresignInput{Bucket: "data", Key: "a.txt"}, principalFor("user_5"))
+	if err != nil {
+		t.Fatalf("presign: %v", err)
+	}
+	entries := logger.(*log.TestLogger).GetLogsByLevel("INFO")
+	if len(entries) != 1 {
+		t.Fatalf("info entries = %d, want 1", len(entries))
+	}
+	want := map[string]any{"store": SingleStoreName, "bucket": "data", "key": "a.txt", "subject": "user_5", "expiresAt": out.ExpiresAt}
+	for k, v := range want {
+		if got, ok := entries[0].Field(k); !ok || got != v {
+			t.Errorf("%s = %v (present %v), want %v", k, got, ok, v)
+		}
+	}
+}
+
+// failingPresignMem claims it can presign and always fails to.
+type failingPresignMem struct{ *memdriver.MemDriver }
+
+func (failingPresignMem) PresignGet(context.Context, string, string, time.Duration) (string, error) {
+	return "", errors.New("no signing key")
+}
+
+func (failingPresignMem) PresignPut(context.Context, string, string, time.Duration) (string, error) {
+	return "", errors.New("no signing key")
+}
+
+func TestObjectsPresign_FailureLogSaysWhichObject(t *testing.T) {
+	m := memdriver.New()
+	if err := m.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	tv := openTrove(t, failingPresignMem{m})
+	mustBucket(t, tv, "data")
+	put(t, tv, "data", "a.txt", "x")
+	deps := testDeps(t, newStores(tv))
+	logger := log.NewTestLogger()
+	deps.Logger = logger
+	if _, err := objectsPresignHandler(deps)(context.Background(), objectsPresignInput{Bucket: "data", Key: "a.txt"}, principalFor("u")); codeOf(err) != "UNAVAILABLE" {
+		t.Fatalf("presign with a failing signer = %v, want UNAVAILABLE", err)
+	}
+	entries := logger.(*log.TestLogger).GetLogsByLevel("ERROR")
+	if len(entries) != 1 {
+		t.Fatalf("error entries = %d, want 1", len(entries))
+	}
+	for k, v := range map[string]any{"store": SingleStoreName, "bucket": "data", "key": "a.txt"} {
+		if got, ok := entries[0].Field(k); !ok || got != v {
+			t.Errorf("%s = %v (present %v), want %v", k, got, ok, v)
 		}
 	}
 }

@@ -22,7 +22,15 @@ type Content struct {
 	PerProcessSecret bool
 }
 
-// URL is the content route with token attached.
+// TicketHeader is the request header that carries an upload ticket. Upload
+// tickets never ride in the URL: forge's tracing records every request's
+// query string, and an upload ticket lives 15 minutes and may allow an
+// overwrite.
+const TicketHeader = "X-Trove-Ticket"
+
+// URL is the content route with token attached. Only download and preview
+// tickets travel this way: they are read-only and live 60 seconds, and a
+// plain <a download> link cannot send a header.
 func (c *Content) URL(token string) string {
 	return c.Path + "?t=" + url.QueryEscape(token)
 }

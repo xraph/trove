@@ -322,8 +322,11 @@ type linkOutput struct {
 	ExpiresAt string `json:"expiresAt"`
 }
 
+// objectsPresignHandler signs a link that reads the object straight from
+// the backend, past the dashboard and its logs, so the signing itself is
+// logged at Info with who asked.
 func objectsPresignHandler(deps Deps) func(context.Context, objectsPresignInput, contract.Principal) (linkOutput, error) {
-	return func(ctx context.Context, in objectsPresignInput, _ contract.Principal) (linkOutput, error) {
+	return func(ctx context.Context, in objectsPresignInput, p contract.Principal) (linkOutput, error) {
 		if err := requireName("bucket", in.Bucket); err != nil {
 			return linkOutput{}, err
 		}
@@ -361,10 +364,17 @@ func objectsPresignHandler(deps Deps) func(context.Context, objectsPresignInput,
 		link, err := signer.PresignGet(ctx, in.Bucket, in.Key, ttl)
 		if err != nil {
 			if deps.Logger != nil {
-				deps.Logger.Error("trove/contract: presign failed", forge.F("store", st.Name), forge.F("error", err))
+				deps.Logger.Error("trove/contract: presign failed", forge.F("store", st.Name),
+					forge.F("bucket", in.Bucket), forge.F("key", in.Key), forge.F("error", err))
 			}
 			return linkOutput{}, unavailable("The driver could not sign a link. GCS needs a service account key and Azure a shared key.")
 		}
-		return linkOutput{URL: link, ExpiresAt: expires.UTC().Format(time.RFC3339)}, nil
+		expiresAt := expires.UTC().Format(time.RFC3339)
+		if deps.Logger != nil {
+			deps.Logger.Info("trove/contract: presigned link issued", forge.F("store", st.Name),
+				forge.F("bucket", in.Bucket), forge.F("key", in.Key), forge.F("subject", subjectOf(p)),
+				forge.F("expiresAt", expiresAt))
+		}
+		return linkOutput{URL: link, ExpiresAt: expiresAt}, nil
 	}
 }

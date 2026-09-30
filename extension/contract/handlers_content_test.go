@@ -86,7 +86,15 @@ func TestBeginUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	tk := ticketFrom(t, deps, out.URL)
+	// The URL is the bare content path. The ticket travels separately, in
+	// the X-Trove-Ticket header, so it never lands in a trace's query.
+	if out.URL != deps.Content.Path || out.ExpiresAt == "" {
+		t.Fatalf("begin = %+v, want the bare path %q and an expiry", out, deps.Content.Path)
+	}
+	tk, err := deps.Content.Signer.Verify(out.Ticket)
+	if err != nil {
+		t.Fatalf("verify the upload ticket: %v", err)
+	}
 	if tk.Op != OpUpload || tk.Size != 10 || tk.ContentType != "text/csv" || tk.Overwrite {
 		t.Fatalf("upload ticket = %+v", tk)
 	}

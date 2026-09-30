@@ -71,6 +71,15 @@ func objectsContentURLHandler(deps Deps) func(context.Context, contentURLInput, 
 	}
 }
 
+// uploadOutput is where to send an upload and the ticket that allows it.
+// URL is the bare content path with no query. Ticket goes in the
+// X-Trove-Ticket request header of the PUT, never in the URL.
+type uploadOutput struct {
+	URL       string `json:"url"`
+	Ticket    string `json:"ticket"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
 type beginUploadInput struct {
 	Store       string `json:"store"`
 	Bucket      string `json:"bucket"`
@@ -80,19 +89,19 @@ type beginUploadInput struct {
 	Overwrite   bool   `json:"overwrite"`
 }
 
-func objectsBeginUploadHandler(deps Deps) func(context.Context, beginUploadInput, contract.Principal) (linkOutput, error) {
-	return func(ctx context.Context, in beginUploadInput, p contract.Principal) (linkOutput, error) {
+func objectsBeginUploadHandler(deps Deps) func(context.Context, beginUploadInput, contract.Principal) (uploadOutput, error) {
+	return func(ctx context.Context, in beginUploadInput, p contract.Principal) (uploadOutput, error) {
 		if err := requireName("bucket", in.Bucket); err != nil {
-			return linkOutput{}, err
+			return uploadOutput{}, err
 		}
 		if in.Key == "" {
-			return linkOutput{}, badRequest("key is required")
+			return uploadOutput{}, badRequest("key is required")
 		}
 		if in.Size < 0 {
-			return linkOutput{}, badRequest("size cannot be negative")
+			return uploadOutput{}, badRequest("size cannot be negative")
 		}
 		if in.Size > deps.Content.MaxUploadBytes {
-			return linkOutput{}, &contract.Error{
+			return uploadOutput{}, &contract.Error{
 				Code:    contract.CodeBadRequest,
 				Message: fmt.Sprintf("This file is larger than the upload limit of %d bytes.", deps.Content.MaxUploadBytes),
 				Details: map[string]any{"maxUploadBytes": deps.Content.MaxUploadBytes},
@@ -100,11 +109,11 @@ func objectsBeginUploadHandler(deps Deps) func(context.Context, beginUploadInput
 		}
 		st, err := deps.Stores.Resolve(in.Store)
 		if err != nil {
-			return linkOutput{}, err
+			return uploadOutput{}, err
 		}
 		err = refuseCASBucket(st.Trove, in.Bucket)
 		if err != nil {
-			return linkOutput{}, err
+			return uploadOutput{}, err
 		}
 		// Always look, even when overwriting: the Head is what says the
 		// bucket is missing or the key is unusable, and a driver's Put may
@@ -113,13 +122,13 @@ func objectsBeginUploadHandler(deps Deps) func(context.Context, beginUploadInput
 		switch {
 		case err == nil:
 			if !in.Overwrite {
-				return linkOutput{}, &contract.Error{
+				return uploadOutput{}, &contract.Error{
 					Code: contract.CodeConflict, Message: "an object with this key already exists",
 					Details: map[string]any{"exists": true},
 				}
 			}
 		case !errors.Is(err, driver.ErrObjectNotFound):
-			return linkOutput{}, deps.mapError("objects.beginUpload", err)
+			return uploadOutput{}, deps.mapError("objects.beginUpload", err)
 		}
 		tk := Ticket{
 			Store: st.Name, Bucket: in.Bucket, Key: in.Key, Op: OpUpload, Subject: subjectOf(p),
@@ -127,9 +136,9 @@ func objectsBeginUploadHandler(deps Deps) func(context.Context, beginUploadInput
 		}
 		tok, expires, err := deps.Content.Signer.Issue(tk, UploadTicketTTL)
 		if err != nil {
-			return linkOutput{}, deps.mapError("objects.beginUpload", err)
+			return uploadOutput{}, deps.mapError("objects.beginUpload", err)
 		}
-		return linkOutput{URL: deps.Content.URL(tok), ExpiresAt: expires.UTC().Format(time.RFC3339)}, nil
+		return uploadOutput{URL: deps.Content.Path, Ticket: tok, ExpiresAt: expires.UTC().Format(time.RFC3339)}, nil
 	}
 }
 
