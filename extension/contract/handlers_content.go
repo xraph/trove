@@ -106,17 +106,20 @@ func objectsBeginUploadHandler(deps Deps) func(context.Context, beginUploadInput
 		if err != nil {
 			return linkOutput{}, err
 		}
-		if !in.Overwrite {
-			_, err = st.Trove.Head(ctx, in.Bucket, in.Key)
-			if err == nil {
+		// Always look, even when overwriting: the Head is what says the
+		// bucket is missing or the key is unusable, and a driver's Put may
+		// create a missing bucket's directory rather than fail.
+		_, err = st.Trove.Head(ctx, in.Bucket, in.Key)
+		switch {
+		case err == nil:
+			if !in.Overwrite {
 				return linkOutput{}, &contract.Error{
 					Code: contract.CodeConflict, Message: "an object with this key already exists",
 					Details: map[string]any{"exists": true},
 				}
 			}
-			if !errors.Is(err, driver.ErrObjectNotFound) {
-				return linkOutput{}, deps.mapError("objects.beginUpload", err)
-			}
+		case !errors.Is(err, driver.ErrObjectNotFound):
+			return linkOutput{}, deps.mapError("objects.beginUpload", err)
 		}
 		tk := Ticket{
 			Store: st.Name, Bucket: in.Bucket, Key: in.Key, Op: OpUpload, Subject: subjectOf(p),

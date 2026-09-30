@@ -132,3 +132,16 @@ func TestCompleteUpload(t *testing.T) {
 		t.Fatalf("complete = %+v, %v", out, err)
 	}
 }
+
+func TestBeginUpload_OverwriteIntoMissingBucketIsNotFound(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, open opener) {
+		tv := open(t)
+		h := objectsBeginUploadHandler(testDeps(t, newStores(tv)))
+		for _, overwrite := range []bool{false, true} {
+			_, err := h(context.Background(), beginUploadInput{Bucket: "typo", Key: "a.txt", Size: 1, Overwrite: overwrite}, principalFor("u"))
+			if codeOf(err) != "NOT_FOUND" {
+				t.Errorf("overwrite=%v into a missing bucket = %v, want NOT_FOUND", overwrite, err)
+			}
+		}
+	})
+}

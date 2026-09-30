@@ -3,15 +3,23 @@ package contract
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/xraph/go-utils/log"
+
 	"github.com/xraph/trove"
+	"github.com/xraph/trove/driver"
+	"github.com/xraph/trove/drivers/localdriver"
+	"github.com/xraph/trove/middleware"
 	"github.com/xraph/trove/middleware/compress"
 )
 
@@ -203,5 +211,129 @@ func TestContentPut_OverwriteIsCheckedAgain(t *testing.T) {
 	put(t, tv, "data", "race.txt", "old")
 	if rec := serve(t, deps, http.MethodPut, link, strings.NewReader("new"), 3); rec.Code != http.StatusConflict {
 		t.Fatalf("put onto a key that appeared after begin = %d", rec.Code)
+	}
+}
+
+// failingRead is a read middleware whose reader yields n bytes and then
+// fails, which is how a corrupt compressed or encrypted object looks.
+type failingRead struct{ n int }
+
+func (failingRead) Name() string                    { return "failing-read" }
+func (failingRead) Direction() middleware.Direction { return middleware.DirectionRead }
+
+func (f failingRead) WrapReader(_ context.Context, r io.ReadCloser, _ *driver.ObjectInfo) (io.ReadCloser, error) {
+	return &failAfter{ReadCloser: r, left: f.n}, nil
+}
+
+type failAfter struct {
+	io.ReadCloser
+	left int
+}
+
+func (f *failAfter) Read(p []byte) (int, error) {
+	if f.left <= 0 {
+		return 0, errors.New("decrypt: message authentication failed")
+	}
+	if len(p) > f.left {
+		p = p[:f.left]
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	f.left -= len(p)
+	return len(p), nil
+}
+
+func TestContentGet_MidStreamFailureAbortsTheResponse(t *testing.T) {
+	tv := openMem(t, trove.WithMiddleware(failingRead{n: 128 << 10}))
+	mustBucket(t, tv, "data")
+	put(t, tv, "data", "big.bin", "stored bytes")
+	deps := testDeps(t, newStores(tv))
+	logger := log.NewTestLogger()
+	srv := httptest.NewServer(deps.Content.Handler(deps.Stores, logger))
+	t.Cleanup(srv.Close)
+
+	for _, op := range []string{OpDownload, OpPreview} {
+		tk := Ticket{Store: SingleStoreName, Bucket: "data", Key: "big.bin", Op: op, Subject: "user_9", Limit: 1 << 20}
+		tok, _, err := deps.Content.Signer.Issue(tk, time.Minute)
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+deps.Content.URL(tok), nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
+		if err == nil {
+			t.Fatalf("%s: a download that failed on the storage side read as complete", op)
+		}
+	}
+
+	tl := logger.(*log.TestLogger)
+	entries := tl.GetLogsByLevel("ERROR")
+	if len(entries) == 0 {
+		t.Fatal("the failure was not logged at error level")
+	}
+	for _, name := range []string{"subject", "op", "store", "bucket", "key"} {
+		if _, ok := entries[0].Field(name); !ok {
+			t.Errorf("error entry has no %q field", name)
+		}
+	}
+	if v, _ := entries[0].Field("subject"); v != "user_9" {
+		t.Errorf("subject = %v", v)
+	}
+}
+
+func TestContentPut_LogsWhoUploadedWhat(t *testing.T) {
+	tv := openMem(t)
+	mustBucket(t, tv, "data")
+	deps := testDeps(t, newStores(tv))
+	logger := log.NewTestLogger()
+	deps.Logger = logger
+	link := issue(t, deps, Ticket{Store: SingleStoreName, Bucket: "data", Key: "up.txt", Op: OpUpload, Size: 3, Subject: "user_3"}, time.Minute)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPut, link, strings.NewReader("abc"))
+	rec := httptest.NewRecorder()
+	deps.Content.Handler(deps.Stores, logger).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put = %d %s", rec.Code, rec.Body)
+	}
+	entries := logger.(*log.TestLogger).GetLogsByLevel("INFO")
+	if len(entries) != 1 {
+		t.Fatalf("info entries = %d, want 1", len(entries))
+	}
+	want := map[string]any{"subject": "user_3", "op": OpUpload, "store": SingleStoreName, "bucket": "data", "key": "up.txt", "storedSize": int64(3)}
+	for k, v := range want {
+		if got, ok := entries[0].Field(k); !ok || got != v {
+			t.Errorf("%s = %v (present %v), want %v", k, got, ok, v)
+		}
+	}
+}
+
+func TestContentPut_OverwriteTicketIntoMissingBucketIs404(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, open opener) {
+		tv := open(t)
+		deps := testDeps(t, newStores(tv))
+		link := issue(t, deps, Ticket{Store: SingleStoreName, Bucket: "typo", Key: "a.txt", Op: OpUpload, Size: 3, Overwrite: true}, time.Minute)
+		if rec := serve(t, deps, http.MethodPut, link, strings.NewReader("abc"), 3); rec.Code != http.StatusNotFound {
+			t.Fatalf("put into a missing bucket = %d %s", rec.Code, rec.Body)
+		}
+	})
+}
+
+func TestContentPut_OverwriteDoesNotCreateABucketDirectory(t *testing.T) {
+	root := t.TempDir()
+	drv := localdriver.New()
+	if err := drv.Open(context.Background(), "file://"+root); err != nil {
+		t.Fatalf("open localdriver: %v", err)
+	}
+	tv := openTrove(t, drv)
+	deps := testDeps(t, newStores(tv))
+	link := issue(t, deps, Ticket{Store: SingleStoreName, Bucket: "typo", Key: "a.txt", Op: OpUpload, Size: 3, Overwrite: true}, time.Minute)
+	if rec := serve(t, deps, http.MethodPut, link, strings.NewReader("abc"), 3); rec.Code != http.StatusNotFound {
+		t.Fatalf("put = %d", rec.Code)
+	}
+	if _, err := os.Stat(filepath.Join(root, "typo")); !os.IsNotExist(err) {
+		t.Fatalf("the typo directory exists (stat err %v)", err)
 	}
 }

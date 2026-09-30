@@ -77,9 +77,10 @@ func (h *contentHandler) serveGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	fields := h.fields(tk, st.Name)
 	obj, err := st.Trove.Get(r.Context(), tk.Bucket, tk.Key)
 	if err != nil {
-		h.writeMapped(w, err)
+		h.writeMapped(w, err, fields)
 		return
 	}
 	defer obj.Close()
@@ -95,20 +96,49 @@ func (h *contentHandler) serveGet(w http.ResponseWriter, r *http.Request) {
 	}
 	hdr.Set("Content-Type", ct)
 
-	var body io.Reader = obj
+	// src sees every read error before io.Copy does, so a failure on the
+	// storage side can be told apart from a client that went away.
+	src := &recordingReader{r: obj}
+	var body io.Reader = src
 	if tk.Op == OpPreview {
-		body = io.LimitReader(obj, tk.Limit)
+		body = io.LimitReader(src, tk.Limit)
 	} else if obj.Info != nil && len(matching(r.Context(), st.Trove, tk.Bucket, tk.Key, middleware.DirectionRead)) == 0 {
 		// The stored size is what is served only when nothing transforms
 		// it on the way out.
 		hdr.Set("Content-Length", strconv.FormatInt(obj.Info.Size, 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, body); err != nil && h.logger != nil {
-		// Headers are gone; all that is left is to say so in the log.
-		h.logger.Error("trove/contract: content download failed mid-stream",
-			forge.F("store", st.Name), forge.F("bucket", tk.Bucket), forge.F("error", err))
+	_, copyErr := io.Copy(w, body)
+	if copyErr == nil {
+		return
 	}
+	if src.err == nil || r.Context().Err() != nil {
+		// The client stopped reading. Nothing is wrong on this side.
+		h.debug("trove/contract: content download abandoned by the client",
+			append(fields, forge.F("error", copyErr))...)
+		return
+	}
+	// The status line and some of the body are already sent. Returning
+	// normally would end a chunked response cleanly and the browser would
+	// save a truncated file as a whole one, so drop the connection instead.
+	h.errorLog("trove/contract: content download failed mid-stream",
+		append(fields, forge.F("error", src.err))...)
+	panic(http.ErrAbortHandler)
+}
+
+// recordingReader remembers the first error its source returned, other than
+// the end of the stream.
+type recordingReader struct {
+	r   io.Reader
+	err error
+}
+
+func (rr *recordingReader) Read(p []byte) (int, error) {
+	n, err := rr.r.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && rr.err == nil {
+		rr.err = err
+	}
+	return n, err
 }
 
 func (h *contentHandler) servePut(w http.ResponseWriter, r *http.Request) {
@@ -116,20 +146,23 @@ func (h *contentHandler) servePut(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	fields := h.fields(tk, st.Name)
 	if r.ContentLength > tk.Size {
-		h.writeContentError(w, http.StatusRequestEntityTooLarge, "This body is larger than the upload was declared.")
+		h.writeContentError(w, http.StatusRequestEntityTooLarge, "This body is larger than the upload was declared.", fields...)
 		return
 	}
-	if !tk.Overwrite {
-		_, err := st.Trove.Head(r.Context(), tk.Bucket, tk.Key)
-		if err == nil {
-			h.writeContentError(w, http.StatusConflict, "An object with this key already exists.")
+	// Always look, even when the ticket allows overwriting: the Head is
+	// what fails on a bucket that does not exist or a key the driver
+	// refuses, and a driver's Put may create the bucket's directory
+	// instead of failing.
+	if _, err := st.Trove.Head(r.Context(), tk.Bucket, tk.Key); err == nil {
+		if !tk.Overwrite {
+			h.writeContentError(w, http.StatusConflict, "An object with this key already exists.", fields...)
 			return
 		}
-		if !errors.Is(err, driver.ErrObjectNotFound) {
-			h.writeMapped(w, err)
-			return
-		}
+	} else if !errors.Is(err, driver.ErrObjectNotFound) {
+		h.writeMapped(w, err, fields)
+		return
 	}
 	body := http.MaxBytesReader(w, r.Body, tk.Size)
 	var opts []driver.PutOption
@@ -141,19 +174,20 @@ func (h *contentHandler) servePut(w http.ResponseWriter, r *http.Request) {
 		var tooLarge *http.MaxBytesError
 		switch {
 		case errors.As(err, &tooLarge):
-			h.writeContentError(w, http.StatusRequestEntityTooLarge, "This body is larger than the upload was declared.")
+			h.writeContentError(w, http.StatusRequestEntityTooLarge, "This body is larger than the upload was declared.", fields...)
 		case errors.Is(err, trove.ErrContentBlocked):
-			h.writeContentError(w, http.StatusUnprocessableEntity, "A content scan blocked this upload.")
+			h.writeContentError(w, http.StatusUnprocessableEntity, "A content scan blocked this upload.", fields...)
 		default:
-			h.writeMapped(w, err)
+			h.writeMapped(w, err, fields)
 		}
 		return
 	}
-	h.writeJSON(w, http.StatusOK, map[string]any{"key": tk.Key, "storedSize": info.Size, "etag": optString(info.ETag)})
+	h.info("trove/contract: content upload stored", append(fields, forge.F("storedSize", info.Size))...)
+	h.writeJSON(w, http.StatusOK, map[string]any{"key": tk.Key, "storedSize": info.Size, "etag": optString(info.ETag)}, fields...)
 }
 
 // writeMapped answers with the HTTP status for err's contract code.
-func (h *contentHandler) writeMapped(w http.ResponseWriter, err error) {
+func (h *contentHandler) writeMapped(w http.ResponseWriter, err error, fields []forge.Field) {
 	mapped := mapError(err)
 	var ce *contract.Error
 	status, msg := http.StatusInternalServerError, "an internal error occurred"
@@ -172,23 +206,53 @@ func (h *contentHandler) writeMapped(w http.ResponseWriter, err error) {
 			status = http.StatusServiceUnavailable
 		}
 	}
-	if status == http.StatusInternalServerError && h.logger != nil {
-		h.logger.Error("trove/contract: content request failed", forge.F("error", err))
+	if status == http.StatusInternalServerError {
+		h.errorLog("trove/contract: content request failed", append(fields, forge.F("error", err))...)
 	}
-	h.writeContentError(w, status, msg)
+	h.writeContentError(w, status, msg, fields...)
 }
 
-func (h *contentHandler) writeContentError(w http.ResponseWriter, status int, msg string) {
+func (h *contentHandler) writeContentError(w http.ResponseWriter, status int, msg string, fields ...forge.Field) {
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(w, status, map[string]string{"error": msg})
+	h.writeJSON(w, status, map[string]string{"error": msg}, fields...)
 }
 
 // writeJSON sends v as the whole response. The status line is already gone
 // if the encode fails, so the log is all that is left to do with it.
-func (h *contentHandler) writeJSON(w http.ResponseWriter, status int, v any) {
+func (h *contentHandler) writeJSON(w http.ResponseWriter, status int, v any, fields ...forge.Field) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil && h.logger != nil {
-		h.logger.Error("trove/contract: content response not written", forge.F("error", err))
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		h.errorLog("trove/contract: content response not written", append(fields, forge.F("error", err))...)
+	}
+}
+
+// fields is what every log line about a ticketed request carries. The
+// subject is there to say who asked, never to authorise anything.
+func (h *contentHandler) fields(tk Ticket, store string) []forge.Field {
+	return []forge.Field{
+		forge.F("subject", tk.Subject),
+		forge.F("op", tk.Op),
+		forge.F("store", store),
+		forge.F("bucket", tk.Bucket),
+		forge.F("key", tk.Key),
+	}
+}
+
+func (h *contentHandler) info(msg string, fields ...forge.Field) {
+	if h.logger != nil {
+		h.logger.Info(msg, fields...)
+	}
+}
+
+func (h *contentHandler) debug(msg string, fields ...forge.Field) {
+	if h.logger != nil {
+		h.logger.Debug(msg, fields...)
+	}
+}
+
+func (h *contentHandler) errorLog(msg string, fields ...forge.Field) {
+	if h.logger != nil {
+		h.logger.Error(msg, fields...)
 	}
 }
