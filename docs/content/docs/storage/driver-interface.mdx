@@ -82,6 +82,16 @@ for {
 objects, _ := iter.All(ctx)
 ```
 
+`NextToken()` returns the cursor for the next page. It is opaque: pass it back unchanged through `driver.WithCursor`, and treat an empty token as the end of the listing. Drivers may use a key, a backend continuation token or anything else, so never build a cursor yourself.
+
+```go
+func (it *ObjectIterator) CommonPrefixes() []string
+```
+
+`CommonPrefixes` returns the folders a listing folded when you pass `driver.WithDelimiter`. Keys below a delimiter after the prefix come back here instead of as objects, for example `logs/` for `logs/a` and `logs/b`. Objects and prefixes form one lexicographic sequence, `MaxKeys` counts both, and each is returned as its own sorted list, so merge them if you need a single ordered view. A page can hold only prefixes, or nothing at all, and still have a next page.
+
+Drivers build an iterator with `driver.NewObjectIterator(objects, nextToken)`, or with `driver.NewObjectIteratorWithPrefixes(objects, prefixes, nextToken)` when they report prefixes. For a driver that holds the whole sorted key set, `driver.PageKeys` applies the prefix, delimiter, cursor and `MaxKeys` rules for you.
+
 ### BucketInfo
 
 ```go

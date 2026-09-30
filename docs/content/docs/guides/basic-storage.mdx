@@ -167,6 +167,8 @@ for _, obj := range objects {
 
 ### Pagination with MaxKeys and Cursor
 
+`NextToken()` is opaque. Pass it back unchanged as the cursor, and stop only when it comes back empty. A page can hold no objects and still have a next page (a page of folders only, or an empty page from a cloud backend), so never stop on `len(objects) == 0`.
+
 ```go
 var cursor string
 for {
@@ -184,20 +186,19 @@ for {
     if err != nil {
         log.Fatal(err)
     }
-    if len(objects) == 0 {
-        break
-    }
 
     for _, obj := range objects {
         fmt.Println(obj.Key)
     }
 
-    cursor = iter.NextCursor()
+    cursor = iter.NextToken()
     if cursor == "" {
         break
     }
 }
 ```
+
+With `WithDelimiter("/")`, keys under a common prefix fold into that prefix and come back from `iter.CommonPrefixes()`. Objects and prefixes form one sorted sequence, and `MaxKeys` counts both.
 
 ## Copy: Duplicate Objects
 

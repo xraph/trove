@@ -4,6 +4,27 @@ All notable changes to Trove are documented in this file.
 
 ## [Unreleased]
 
+### Listing
+
+#### Changed
+- **`memdriver`, `localdriver` and `sftpdriver` now honour `Delimiter`.** They used to ignore it, so `WithDelimiter("/")` returned every key under the prefix as an object. Keys below a delimiter now fold into `ObjectIterator.CommonPrefixes()` and no longer come back as objects, the same as on S3, GCS and Azure. Objects and prefixes form one lexicographic sequence, and `MaxKeys` counts both.
+- **On S3, GCS and Azure the cursor is now the backend's opaque token.** `NextToken()` carries the S3 `ContinuationToken`, the GCS page token or the Azure `NextMarker`, and you pass it back unchanged through `WithCursor`. A key passed as `Cursor` no longer means "start after this key" on those drivers. A GCS cursor you saved before the upgrade (it was the last key) now fails, so restart those listings from the beginning.
+- **A page can hold zero objects and still carry a non-empty `NextToken`.** That happens on a page that holds only prefixes, and on a cloud backend's empty page. Stop paging only when `NextToken()` is empty, never when `len(objects) == 0`.
+- **`vfs.FS.ReadDir` now reports directories the driver folded.** Entries come back sorted by name, files and directories interleaved, instead of files first.
+- **`gcsdriver` no longer returns rows with `Key: ""` for prefixes.** Prefixes are reported through `CommonPrefixes()` like everywhere else.
+
+#### Added
+- **`driver.NewObjectIteratorWithPrefixes`** and **`ObjectIterator.CommonPrefixes()`**: build an iterator that carries folded prefixes, and read them back. `driver.NewObjectIterator` is unchanged.
+- **`driver.PageKeys` and `driver.KeyPage`**: one implementation of prefix, delimiter, cursor and `MaxKeys` handling over a sorted key set, used by the drivers that hold the whole key list.
+- **`cas.CAS.Bucket()` and `cas.CAS.Stat()`**: the bucket a store writes to, and the index entry for a hash.
+- **`stream.Stream.TotalSize()`**: the total size of a stream.
+
+#### Fixed
+- **S3 and Azure paging.** Both now page with the backend's own token and report common prefixes. S3 and Azure also clamp `MaxKeys` to the backend's page cap (1000 and 5000).
+- **`s3driver`: `WithMaxKeys(0)` now means the default page size** of 1000 rather than a request for zero keys.
+
+---
+
 ### Path Traversal
 
 #### Fixed
