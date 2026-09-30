@@ -61,6 +61,11 @@ func bindings(deps Deps) []binding {
 		query("system.status", systemStatusHandler(deps)),
 		query("stores.list", storesListHandler(deps)),
 		query("middleware.list", middlewareListHandler(deps)),
+		query("buckets.list", bucketsListHandler(deps)),
+		command("buckets.create", bucketsCreateHandler(deps)),
+		command("buckets.delete", bucketsDeleteHandler(deps)),
+		query("objects.list", objectsListHandler(deps)),
+		query("objects.head", objectsHeadHandler(deps)),
 	}
 }
 
