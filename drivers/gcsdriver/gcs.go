@@ -272,34 +272,30 @@ func (d *GCSDriver) List(ctx context.Context, bucket string, opts ...driver.List
 		maxKeys = 1000
 	}
 
+	// The cursor is the page token of the previous page. The pager sends it
+	// as pageToken and returns the next one, so a page never re-reads the
+	// objects before it.
 	it := client.Bucket(bucket).Objects(ctx, query)
+	pager := iterator.NewPager(it, maxKeys, cfg.Cursor)
 
-	var infos []driver.ObjectInfo
-	var nextToken string
-	count := 0
-
-	for {
-		attrs, err := it.Next()
-		if err == iterator.Done {
-			break
+	var page []*storage.ObjectAttrs
+	nextToken, err := pager.NextPage(&page)
+	if err != nil {
+		if cErr := classifyErr(err, bucket, ""); cErr != nil {
+			return nil, cErr
 		}
-		if err != nil {
-			if cErr := classifyErr(err, bucket, ""); cErr != nil {
-				return nil, cErr
-			}
-			return nil, fmt.Errorf("gcsdriver: list bucket %q: %w", bucket, err)
-		}
+		return nil, fmt.Errorf("gcsdriver: list bucket %q: %w", bucket, err)
+	}
 
-		if cfg.Cursor != "" && attrs.Name <= cfg.Cursor {
+	infos := make([]driver.ObjectInfo, 0, len(page))
+	var prefixes []string
+	for _, attrs := range page {
+		// With a delimiter, GCS returns each common prefix as an entry with
+		// only Prefix set.
+		if attrs.Name == "" && attrs.Prefix != "" {
+			prefixes = append(prefixes, attrs.Prefix)
 			continue
 		}
-
-		count++
-		if count > maxKeys {
-			nextToken = infos[len(infos)-1].Key
-			break
-		}
-
 		infos = append(infos, driver.ObjectInfo{
 			Key:          attrs.Name,
 			Size:         attrs.Size,
@@ -314,8 +310,9 @@ func (d *GCSDriver) List(ctx context.Context, bucket string, opts ...driver.List
 	sort.Slice(infos, func(i, j int) bool {
 		return infos[i].Key < infos[j].Key
 	})
+	sort.Strings(prefixes)
 
-	return driver.NewObjectIterator(infos, nextToken), nil
+	return driver.NewObjectIteratorWithPrefixes(infos, prefixes, nextToken), nil
 }
 
 // Copy copies an object within or across buckets.
