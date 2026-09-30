@@ -489,13 +489,6 @@ func (d *LocalDriver) List(_ context.Context, bucket string, opts ...driver.List
 			return err
 		}
 
-		if cfg.Prefix != "" && !strings.HasPrefix(rel, cfg.Prefix) {
-			return nil
-		}
-		if cfg.Cursor != "" && rel <= cfg.Cursor {
-			return nil
-		}
-
 		keys = append(keys, rel)
 		return nil
 	})
@@ -505,19 +498,10 @@ func (d *LocalDriver) List(_ context.Context, bucket string, opts ...driver.List
 
 	sort.Strings(keys)
 
-	maxKeys := cfg.MaxKeys
-	if maxKeys <= 0 {
-		maxKeys = 1000
-	}
+	page := driver.PageKeys(keys, cfg)
 
-	var nextToken string
-	if len(keys) > maxKeys {
-		nextToken = keys[maxKeys-1]
-		keys = keys[:maxKeys]
-	}
-
-	infos := make([]driver.ObjectInfo, 0, len(keys))
-	for _, key := range keys {
+	infos := make([]driver.ObjectInfo, 0, len(page.Keys))
+	for _, key := range page.Keys {
 		objPath := filepath.Join(bucketDir, key)
 		stat, err := os.Stat(objPath)
 		if err != nil {
@@ -534,7 +518,7 @@ func (d *LocalDriver) List(_ context.Context, bucket string, opts ...driver.List
 		})
 	}
 
-	return driver.NewObjectIterator(infos, nextToken), nil
+	return driver.NewObjectIteratorWithPrefixes(infos, page.Prefixes, page.NextToken), nil
 }
 
 // Copy copies an object within or across buckets.

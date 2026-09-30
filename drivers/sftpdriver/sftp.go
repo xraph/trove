@@ -425,33 +425,12 @@ func (d *SFTPDriver) List(_ context.Context, bucket string, opts ...driver.ListO
 		return nil, fmt.Errorf("sftpdriver: list: %w", err)
 	}
 
-	// Filter by prefix and cursor.
-	var filtered []string
-	for _, key := range keys {
-		if cfg.Prefix != "" && !strings.HasPrefix(key, cfg.Prefix) {
-			continue
-		}
-		if cfg.Cursor != "" && key <= cfg.Cursor {
-			continue
-		}
-		filtered = append(filtered, key)
-	}
+	sort.Strings(keys)
 
-	sort.Strings(filtered)
+	page := driver.PageKeys(keys, cfg)
 
-	maxKeys := cfg.MaxKeys
-	if maxKeys <= 0 {
-		maxKeys = 1000
-	}
-
-	var nextToken string
-	if len(filtered) > maxKeys {
-		nextToken = filtered[maxKeys-1]
-		filtered = filtered[:maxKeys]
-	}
-
-	infos := make([]driver.ObjectInfo, 0, len(filtered))
-	for _, key := range filtered {
+	infos := make([]driver.ObjectInfo, 0, len(page.Keys))
+	for _, key := range page.Keys {
 		objPath := path.Join(bucketDir, key)
 		stat, err := client.Stat(objPath)
 		if err != nil {
@@ -468,7 +447,7 @@ func (d *SFTPDriver) List(_ context.Context, bucket string, opts ...driver.ListO
 		})
 	}
 
-	return driver.NewObjectIterator(infos, nextToken), nil
+	return driver.NewObjectIteratorWithPrefixes(infos, page.Prefixes, page.NextToken), nil
 }
 
 // Copy copies an object within or across buckets.

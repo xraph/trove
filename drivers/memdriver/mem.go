@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -214,37 +213,20 @@ func (d *MemDriver) List(_ context.Context, bucket string, opts ...driver.ListOp
 		return nil, fmt.Errorf("memdriver: bucket %q not found: %w", bucket, driver.ErrBucketNotFound)
 	}
 
-	// Collect keys sorted alphabetically.
 	keys := make([]string, 0, len(objects))
 	for k := range objects {
-		if cfg.Prefix != "" && !strings.HasPrefix(k, cfg.Prefix) {
-			continue
-		}
-		if cfg.Cursor != "" && k <= cfg.Cursor {
-			continue
-		}
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	// Apply max keys limit.
-	maxKeys := cfg.MaxKeys
-	if maxKeys <= 0 {
-		maxKeys = 1000
-	}
+	page := driver.PageKeys(keys, cfg)
 
-	var nextToken string
-	if len(keys) > maxKeys {
-		nextToken = keys[maxKeys-1]
-		keys = keys[:maxKeys]
-	}
-
-	infos := make([]driver.ObjectInfo, 0, len(keys))
-	for _, k := range keys {
+	infos := make([]driver.ObjectInfo, 0, len(page.Keys))
+	for _, k := range page.Keys {
 		infos = append(infos, objects[k].info)
 	}
 
-	return driver.NewObjectIterator(infos, nextToken), nil
+	return driver.NewObjectIteratorWithPrefixes(infos, page.Prefixes, page.NextToken), nil
 }
 
 // Copy copies an object within or across buckets.

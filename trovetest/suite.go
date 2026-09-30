@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -361,6 +362,76 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 			assert.Equal(t, "d.txt", objects2[1].Key)
 		})
 
+		t.Run("ListDelimiter", func(t *testing.T) {
+			drv := factory(t)
+			ctx := context.Background()
+			require.NoError(t, drv.CreateBucket(ctx, "data"))
+			for _, key := range []string{"a/1", "a/2", "b/c/d", "top.txt"} {
+				_, err := drv.Put(ctx, "data", key, strings.NewReader("x"))
+				require.NoError(t, err)
+			}
+
+			iter, err := drv.List(ctx, "data", driver.WithDelimiter("/"))
+			require.NoError(t, err)
+			objects, err := iter.All(ctx)
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{"a/", "b/"}, iter.CommonPrefixes())
+			require.Len(t, objects, 1)
+			assert.Equal(t, "top.txt", objects[0].Key)
+			assert.Empty(t, iter.NextToken())
+		})
+
+		t.Run("ListDelimiterWithPrefix", func(t *testing.T) {
+			drv := factory(t)
+			ctx := context.Background()
+			require.NoError(t, drv.CreateBucket(ctx, "data"))
+			for _, key := range []string{"b/c/d", "b/e", "z"} {
+				_, err := drv.Put(ctx, "data", key, strings.NewReader("x"))
+				require.NoError(t, err)
+			}
+
+			iter, err := drv.List(ctx, "data", driver.WithPrefix("b/"), driver.WithDelimiter("/"))
+			require.NoError(t, err)
+			objects, err := iter.All(ctx)
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{"b/c/"}, iter.CommonPrefixes())
+			require.Len(t, objects, 1)
+			assert.Equal(t, "b/e", objects[0].Key)
+		})
+
+		t.Run("ListDelimiterPagination", func(t *testing.T) {
+			drv := factory(t)
+			ctx := context.Background()
+			require.NoError(t, drv.CreateBucket(ctx, "data"))
+			for _, key := range []string{"a/1", "a/2", "b/1", "top.txt"} {
+				_, err := drv.Put(ctx, "data", key, strings.NewReader("x"))
+				require.NoError(t, err)
+			}
+
+			items, pages := listItems(t, drv, "data", driver.WithDelimiter("/"), driver.WithMaxKeys(1))
+			assert.Equal(t, []string{"a/", "b/", "top.txt"}, items)
+			assert.Equal(t, 3, pages)
+		})
+
+		t.Run("ListLastPageHasNoToken", func(t *testing.T) {
+			drv := factory(t)
+			ctx := context.Background()
+			require.NoError(t, drv.CreateBucket(ctx, "data"))
+			for _, key := range []string{"a", "b", "c"} {
+				_, err := drv.Put(ctx, "data", key, strings.NewReader("x"))
+				require.NoError(t, err)
+			}
+
+			iter, err := drv.List(ctx, "data", driver.WithMaxKeys(3))
+			require.NoError(t, err)
+			objects, err := iter.All(ctx)
+			require.NoError(t, err)
+			assert.Len(t, objects, 3)
+			assert.Empty(t, iter.NextToken())
+		})
+
 		t.Run("ListBucketNotFound", func(t *testing.T) {
 			drv := factory(t)
 			ctx := context.Background()
@@ -508,4 +579,37 @@ func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver) {
 		err := drv.Ping(ctx)
 		assert.NoError(t, err)
 	})
+}
+
+// listItems walks every page of a listing and returns its items in order,
+// prefixes and keys merged, plus the number of pages it took.
+func listItems(t *testing.T, drv driver.Driver, bucket string, opts ...driver.ListOption) (items []string, pages int) {
+	t.Helper()
+	ctx := context.Background()
+
+	cursor := ""
+	for {
+		pageOpts := append([]driver.ListOption{}, opts...)
+		if cursor != "" {
+			pageOpts = append(pageOpts, driver.WithCursor(cursor))
+		}
+		iter, err := drv.List(ctx, bucket, pageOpts...)
+		require.NoError(t, err)
+		objects, err := iter.All(ctx)
+		require.NoError(t, err)
+
+		page := append([]string{}, iter.CommonPrefixes()...)
+		for _, o := range objects {
+			page = append(page, o.Key)
+		}
+		sort.Strings(page)
+		items = append(items, page...)
+		pages++
+
+		cursor = iter.NextToken()
+		if cursor == "" {
+			return items, pages
+		}
+		require.Less(t, pages, 100, "listing never finished")
+	}
 }

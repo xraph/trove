@@ -67,11 +67,13 @@ func (f *FS) Stat(ctx context.Context, name string) (*FileInfo, error) {
 	defer iter.Close()
 
 	_, nextErr := iter.Next(ctx)
-	if errors.Is(nextErr, io.EOF) {
-		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
-	}
-	if nextErr != nil {
+	if nextErr != nil && !errors.Is(nextErr, io.EOF) {
 		return nil, fmt.Errorf("vfs: stat %q: %w", name, nextErr)
+	}
+	// A directory holding only subdirectories has no objects on this page,
+	// only common prefixes.
+	if errors.Is(nextErr, io.EOF) && len(iter.CommonPrefixes()) == 0 {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
 
 	return &FileInfo{
@@ -149,6 +151,18 @@ func (f *FS) ReadDir(ctx context.Context, name string) ([]DirEntry, error) {
 				},
 			})
 		}
+	}
+
+	// Subdirectories the driver folded into common prefixes.
+	for _, p := range iter.CommonPrefixes() {
+		dirName := strings.TrimSuffix(strings.TrimPrefix(p, prefix), "/")
+		if dirName == "" || seen[dirName] {
+			continue
+		}
+		seen[dirName] = true
+		entries = append(entries, DirEntry{
+			info: FileInfo{name: dirName, isDir: true},
+		})
 	}
 
 	return entries, nil

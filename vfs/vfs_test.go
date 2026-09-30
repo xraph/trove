@@ -281,3 +281,30 @@ func TestVFS_IOFS_InvalidPath(t *testing.T) {
 	_, err := iofs.Open("../invalid")
 	assert.Error(t, err)
 }
+
+func TestVFS_Stat_DirectoryWithOnlySubdirectories(t *testing.T) {
+	v, store := setup(t)
+	ctx := context.Background()
+	putFile(t, store, "a/b/c.txt", "c")
+
+	info, err := v.Stat(ctx, "a")
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
+func TestVFS_ReadDir_ShowsNestedDirectoryOnce(t *testing.T) {
+	v, store := setup(t)
+	ctx := context.Background()
+	putFile(t, store, "sub/deeper/x.txt", "x")
+	putFile(t, store, "sub/deeper/y.txt", "y")
+	putFile(t, store, "sub/z.txt", "z")
+
+	entries, err := v.ReadDir(ctx, "sub")
+	require.NoError(t, err)
+
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.Name()] = e.IsDir()
+	}
+	assert.Equal(t, map[string]bool{"deeper": true, "z.txt": false}, got)
+}
