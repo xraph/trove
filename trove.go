@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/xraph/trove/cas"
 	"github.com/xraph/trove/driver"
@@ -237,6 +238,16 @@ func (t *Trove) Driver() driver.Driver {
 // this one.
 func (t *Trove) DriverFor(bucket, key string) driver.Driver {
 	return t.router.Resolve(bucket, key)
+}
+
+// Backends returns the names of the backends registered with WithBackend,
+// sorted. The default driver has no name and is never in the list, so an
+// empty list means every operation goes to the default. A handle returned
+// by Backend is pinned to one driver and returns an empty list.
+func (t *Trove) Backends() []string {
+	names := t.router.Backends()
+	sort.Strings(names)
+	return names
 }
 
 // Config returns a copy of the current configuration.

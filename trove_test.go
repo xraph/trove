@@ -339,3 +339,22 @@ func TestDriverFor(t *testing.T) {
 	assert.Same(t, def, tr.DriverFor("data", "app.txt"), "a non-matching key is served by the default")
 	assert.Same(t, def, tr.Driver(), "Driver stays the default")
 }
+
+func TestBackends(t *testing.T) {
+	single, err := trove.Open(memdriver.New())
+	require.NoError(t, err)
+	assert.NotNil(t, single.Backends(), "a Trove with only its default returns an empty list, not nil")
+	assert.Empty(t, single.Backends())
+
+	routed, err := trove.Open(memdriver.New(),
+		trove.WithBackend("zeta", memdriver.New()),
+		trove.WithBackend("archive", memdriver.New()),
+		trove.WithRoute("*.log", "archive"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"archive", "zeta"}, routed.Backends(), "named backends, sorted, without the unnamed default")
+
+	pinned, err := routed.Backend("archive")
+	require.NoError(t, err)
+	assert.Empty(t, pinned.Backends(), "a handle pinned to one backend routes nowhere else")
+}
