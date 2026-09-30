@@ -2,12 +2,14 @@ package contract
 
 import (
 	"context"
+	"strings"
 
 	"github.com/xraph/forge"
 	"github.com/xraph/forge/extensions/dashboard/contract"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/driver"
+	"github.com/xraph/trove/middleware"
 )
 
 // storeInput is the input of every intent that takes only a store.
@@ -114,35 +116,82 @@ func systemStatusHandler(deps Deps) func(context.Context, storeInput, contract.P
 	}
 }
 
+// writeCoverage describes where one middleware runs on the write path.
+type writeCoverage struct {
+	registered bool     // any registration, in either direction
+	applied    bool     // at least one registration runs on the write path
+	global     bool     // one of those has a global scope
+	scopes     []string // distinct scopes of the write-path registrations
+}
+
+func coverageOf(t *trove.Trove, name string) writeCoverage {
+	var c writeCoverage
+	seen := map[string]bool{}
+	for _, r := range t.Resolver().Registrations() {
+		if r.Middleware.Name() != name {
+			continue
+		}
+		c.registered = true
+		if !runs(r, middleware.DirectionWrite) {
+			continue
+		}
+		c.applied = true
+		sc := scopeOf(r)
+		if _, ok := sc.(middleware.ScopeGlobal); ok {
+			c.global = true
+		}
+		if str := sc.String(); !seen[str] {
+			seen[str] = true
+			c.scopes = append(c.scopes, str)
+		}
+	}
+	return c
+}
+
+// protectionFlag builds one flag from what was configured and where the
+// middleware really runs. Applied means it runs when an object is written;
+// a registration that only runs on reads, or only inside a narrow scope,
+// never reads as blanket protection. verb is the past participle
+// ("encrypted"); missing is the note for a configured flag with nothing
+// registered.
+func protectionFlag(name string, configured bool, c writeCoverage, verb, missing string) flagStatus {
+	f := flagStatus{Name: name, Configured: configured, Applied: c.applied}
+	var notes []string
+	switch {
+	case c.registered && !c.applied:
+		notes = append(notes, "Registered for reads only, so nothing is "+verb+" on write.")
+	case !c.registered && configured:
+		notes = append(notes, missing)
+	case c.applied && !configured:
+		notes = append(notes, "Registered in code rather than by a config switch.")
+	}
+	if c.applied && !c.global {
+		notes = append(notes, "Applies only where its scope matches: "+strings.Join(c.scopes, ", ")+". Objects outside that scope are not "+verb+".")
+	}
+	if len(notes) > 0 {
+		f.Note = optString(strings.Join(notes, " "))
+	}
+	return f
+}
+
 // protectionFlags reports each protection configured against applied.
 func protectionFlags(t *trove.Trove, configured Flags) []flagStatus {
-	registered := map[string]bool{}
-	for _, r := range t.Resolver().Registrations() {
-		registered[r.Middleware.Name()] = true
-	}
-
-	encryption := flagStatus{Name: "encryption", Configured: configured.Encryption, Applied: registered["encrypt"]}
-	switch {
-	case encryption.Configured && !encryption.Applied:
-		encryption.Note = optString("enable_encryption is set, but the extension never registers the encrypt middleware. Nothing is encrypted.")
-	case !encryption.Configured && encryption.Applied:
-		encryption.Note = optString("Registered in code rather than by a config switch.")
-	}
-
-	compression := flagStatus{Name: "compression", Configured: configured.Compression, Applied: registered["compress"]}
-	switch {
-	case compression.Configured && !compression.Applied:
-		compression.Note = optString("enable_compression is set, but no compress middleware is registered.")
-	case !compression.Configured && compression.Applied:
-		compression.Note = optString("Registered in code rather than by a config switch.")
-	}
+	encryption := protectionFlag("encryption", configured.Encryption, coverageOf(t, "encrypt"), "encrypted",
+		"enable_encryption is set, but the extension never registers the encrypt middleware. Nothing is encrypted.")
+	compression := protectionFlag("compression", configured.Compression, coverageOf(t, "compress"), "compressed",
+		"enable_compression is set, but no compress middleware is registered.")
 
 	// Scanning has no config switch: it is on only when code registers it.
-	scanning := flagStatus{Name: "scanning", Configured: registered["scan"], Applied: registered["scan"]}
-	if scanning.Applied {
-		scanning.Note = optString("Registered in code. A scan with no provider, an excluded extension or an object over its size limit passes through unscanned, and nothing records which objects were scanned.")
-	} else {
+	sc := coverageOf(t, "scan")
+	scanning := protectionFlag("scanning", sc.registered, sc, "scanned", "")
+	caveat := "Registered in code. A scan with no provider, an excluded extension or an object over its size limit passes through unscanned, and nothing records which objects were scanned."
+	switch {
+	case !sc.registered:
 		scanning.Note = optString("No scan middleware is registered, so uploads are not scanned.")
+	case scanning.Note != nil:
+		scanning.Note = optString(caveat + " " + *scanning.Note)
+	default:
+		scanning.Note = optString(caveat)
 	}
 
 	casFlag := flagStatus{Name: "cas", Configured: configured.CAS, Applied: t.CAS() != nil}

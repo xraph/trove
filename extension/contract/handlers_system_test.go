@@ -3,12 +3,15 @@ package contract
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
+	"github.com/xraph/trove/middleware"
 	"github.com/xraph/trove/middleware/compress"
 	"github.com/xraph/trove/middleware/encrypt"
+	"github.com/xraph/trove/middleware/scan"
 )
 
 func flagByName(t *testing.T, s systemStatus, name string) flagStatus {
@@ -119,5 +122,62 @@ func TestStoresList_SingleAndMulti(t *testing.T) {
 	}
 	if out.Stores[0].IsDefault || !out.Stores[1].IsDefault || out.Stores[1].Driver != "local" {
 		t.Fatalf("multi stores = %+v", out.Stores)
+	}
+}
+
+func encryptMW(t *testing.T) middleware.Middleware {
+	t.Helper()
+	return encrypt.New(encrypt.WithKeyProvider(encrypt.NewStaticKeyProvider(bytes.Repeat([]byte("k"), 32))))
+}
+
+func TestSystemStatus_ScopedEncryptionSaysWhereItApplies(t *testing.T) {
+	tv := openMem(t, trove.WithScopedMiddleware(middleware.ForBuckets("reports"), encryptMW(t)))
+	s, err := systemStatusHandler(testDeps(t, newStores(tv)))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	f := flagByName(t, s, "encryption")
+	if !f.Applied || f.Note == nil {
+		t.Fatalf("encryption = %+v, want applied with a note", f)
+	}
+	for _, want := range []string{"bucket(reports)", "Objects outside that scope are not encrypted"} {
+		if !strings.Contains(*f.Note, want) {
+			t.Errorf("note %q does not contain %q", *f.Note, want)
+		}
+	}
+}
+
+func TestSystemStatus_ReadOnlyEncryptionIsNotApplied(t *testing.T) {
+	tv := openMem(t, trove.WithReadMiddleware(encryptMW(t)))
+	s, err := systemStatusHandler(testDeps(t, NewSingleStore(tv, Flags{Encryption: true})))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	f := flagByName(t, s, "encryption")
+	if f.Applied || f.Note == nil || !strings.Contains(*f.Note, "Registered for reads only, so nothing is encrypted on write.") {
+		t.Fatalf("encryption = %+v (note %v), want not applied with the reads-only note", f, f.Note)
+	}
+}
+
+func TestSystemStatus_GlobalEncryptionHasNoScopeNote(t *testing.T) {
+	tv := openMem(t, trove.WithMiddleware(encryptMW(t)))
+	s, err := systemStatusHandler(testDeps(t, NewSingleStore(tv, Flags{Encryption: true})))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	if f := flagByName(t, s, "encryption"); !f.Applied || f.Note != nil {
+		t.Fatalf("encryption = %+v (note %v), want applied with no note", f, f.Note)
+	}
+}
+
+func TestSystemStatus_ScopedScanningKeepsItsCaveat(t *testing.T) {
+	tv := openMem(t, trove.WithScopedMiddleware(middleware.ForBuckets("uploads"), scan.New()))
+	s, err := systemStatusHandler(testDeps(t, newStores(tv)))(context.Background(), storeInput{}, principalFor("u"))
+	if err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	f := flagByName(t, s, "scanning")
+	if !f.Applied || f.Note == nil || !strings.Contains(*f.Note, "bucket(uploads)") || !strings.Contains(*f.Note, "nothing records which objects were scanned") {
+		t.Fatalf("scanning = %+v (note %v)", f, f.Note)
 	}
 }
