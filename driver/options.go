@@ -162,10 +162,13 @@ type ListConfig struct {
 	// Prefix filters objects by key prefix.
 	Prefix string
 
-	// Delimiter groups keys by a delimiter character (e.g., "/").
+	// Delimiter groups keys by a delimiter character (e.g., "/"). Keys that
+	// contain the delimiter after Prefix are folded into a common prefix and
+	// come back in ObjectIterator.CommonPrefixes() instead of as objects.
 	Delimiter string
 
-	// MaxKeys is the maximum number of objects to return.
+	// MaxKeys is the maximum number of objects and common prefixes returned
+	// together in one page.
 	MaxKeys int
 
 	// Cursor is the NextToken from a previous List call, passed back

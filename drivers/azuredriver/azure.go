@@ -341,7 +341,9 @@ func (d *AzureDriver) List(ctx context.Context, bucket string, opts ...driver.Li
 	if maxKeys <= 0 {
 		maxKeys = 1000
 	}
-	maxResults := int32(maxKeys)
+	// Azure caps a page at 5000 results. Clamping here also keeps the int32
+	// narrowing below in range.
+	maxResults := int32(min(maxKeys, 5000))
 
 	var prefixPtr, markerPtr *string
 	if cfg.Prefix != "" {

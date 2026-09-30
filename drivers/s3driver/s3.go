@@ -372,6 +372,9 @@ func (d *S3Driver) List(ctx context.Context, bucket string, opts ...driver.ListO
 	if maxKeys <= 0 {
 		maxKeys = 1000
 	}
+	// S3 never returns more than 1000 keys per page. Clamping here also keeps
+	// the int32 narrowing below in range.
+	maxKeys = min(maxKeys, 1000)
 
 	input := &s3.ListObjectsV2Input{
 		Bucket:  aws.String(bucket),

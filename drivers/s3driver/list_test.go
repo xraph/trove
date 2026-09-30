@@ -90,3 +90,14 @@ func TestList_MaxKeysZeroUsesDefault(t *testing.T) {
 	require.Len(t, q, 1)
 	assert.Equal(t, "1000", q[0].Get("max-keys"))
 }
+
+func TestList_MaxKeysIsClampedToS3Cap(t *testing.T) {
+	drv, queries := fakeS3(t)
+
+	_, err := drv.List(context.Background(), "data", driver.WithMaxKeys(5000))
+	require.NoError(t, err)
+
+	q := queries()
+	require.Len(t, q, 1)
+	assert.Equal(t, "1000", q[0].Get("max-keys"))
+}

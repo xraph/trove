@@ -64,3 +64,31 @@ func TestList_PagesWithMarkerAndReportsPrefixes(t *testing.T) {
 	assert.Equal(t, "2", queries[0].Get("maxresults"))
 	assert.Equal(t, "opaque-marker-2", queries[1].Get("marker"))
 }
+
+func TestList_MaxKeysIsClampedToAzureCap(t *testing.T) {
+	var mu sync.Mutex
+	var queries []url.Values
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		queries = append(queries, r.URL.Query())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, azPageTwo)
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := New()
+	ctx := context.Background()
+	require.NoError(t, drv.Open(ctx, "azure://devaccount/data?endpoint="+url.QueryEscape(srv.URL)))
+
+	it, err := drv.List(ctx, "data", driver.WithDelimiter("/"), driver.WithMaxKeys(9000))
+	require.NoError(t, err)
+	_, err = it.All(ctx)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, queries, 1)
+	assert.Equal(t, "5000", queries[0].Get("maxresults"))
+}

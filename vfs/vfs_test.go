@@ -308,3 +308,20 @@ func TestVFS_ReadDir_ShowsNestedDirectoryOnce(t *testing.T) {
 	}
 	assert.Equal(t, map[string]bool{"deeper": true, "z.txt": false}, got)
 }
+
+func TestVFS_ReadDir_SortsFilesAndFoldedDirectoriesByName(t *testing.T) {
+	v, store := setup(t)
+	ctx := context.Background()
+	putFile(t, store, "a.txt", "a")
+	putFile(t, store, "c.txt", "c")
+	putFile(t, store, "b/x", "x")
+
+	entries, err := v.ReadDir(ctx, "")
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.Equal(t, []string{"a.txt", "b", "c.txt"}, names)
+}

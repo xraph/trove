@@ -80,3 +80,10 @@ func TestObjectIterator_CommonPrefixes(t *testing.T) {
 	plain := NewObjectIterator([]ObjectInfo{{Key: "x"}}, "")
 	assert.Empty(t, plain.CommonPrefixes())
 }
+
+func TestPageKeys_FolderAsLastItemHasNoNextToken(t *testing.T) {
+	p := PageKeys([]string{"a/1", "a/2"}, ListConfig{Delimiter: "/", MaxKeys: 1})
+	assert.Equal(t, []string{"a/"}, p.Prefixes)
+	assert.Empty(t, p.Keys)
+	assert.Empty(t, p.NextToken, "the folder is the last item, so the listing is complete")
+}

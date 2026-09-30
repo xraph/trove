@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -164,6 +165,10 @@ func (f *FS) ReadDir(ctx context.Context, name string) ([]DirEntry, error) {
 			info: FileInfo{name: dirName, isDir: true},
 		})
 	}
+
+	// Files and folded directories arrive as two sequences, so restore one
+	// name order for callers.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 
 	return entries, nil
 }
