@@ -325,7 +325,9 @@ func (d *AzureDriver) Head(ctx context.Context, bucket, key string) (*driver.Obj
 	}, nil
 }
 
-// List returns objects matching the given options.
+// List returns one page of objects matching the given options. The cursor
+// is the NextMarker of the previous page, passed back as Marker; it is
+// opaque, never a blob name.
 func (d *AzureDriver) List(ctx context.Context, bucket string, opts ...driver.ListOption) (*driver.ObjectIterator, error) {
 	cfg := driver.ApplyListOptions(opts...)
 	client, _, err := d.getClient()
@@ -335,84 +337,104 @@ func (d *AzureDriver) List(ctx context.Context, bucket string, opts ...driver.Li
 
 	containerClient := client.ServiceClient().NewContainerClient(bucket)
 
-	listOpts := &container.ListBlobsFlatOptions{}
-	if cfg.Prefix != "" {
-		listOpts.Prefix = &cfg.Prefix
-	}
-
 	maxKeys := cfg.MaxKeys
 	if maxKeys <= 0 {
 		maxKeys = 1000
 	}
-	maxResults := int32(maxKeys + 1) // +1 for pagination detection
-	listOpts.MaxResults = &maxResults
+	maxResults := int32(maxKeys)
 
+	var prefixPtr, markerPtr *string
+	if cfg.Prefix != "" {
+		prefixPtr = &cfg.Prefix
+	}
 	if cfg.Cursor != "" {
-		listOpts.Marker = &cfg.Cursor
+		markerPtr = &cfg.Cursor
 	}
 
-	pager := containerClient.NewListBlobsFlatPager(listOpts)
+	var (
+		items    []*container.BlobItem
+		prefixes []string
+		next     *string
+	)
 
-	var infos []driver.ObjectInfo
-	var nextToken string
-
-	for pager.More() {
-		resp, err := pager.NextPage(ctx)
-		if err != nil {
-			if cErr := classifyErr(err, bucket, ""); cErr != nil {
-				return nil, cErr
-			}
-			return nil, fmt.Errorf("azuredriver: list bucket %q: %w", bucket, err)
+	if cfg.Delimiter != "" {
+		pager := containerClient.NewListBlobsHierarchyPager(cfg.Delimiter, &container.ListBlobsHierarchyOptions{
+			Prefix:     prefixPtr,
+			Marker:     markerPtr,
+			MaxResults: &maxResults,
+		})
+		resp, pageErr := pager.NextPage(ctx)
+		if pageErr != nil {
+			return nil, d.listErr(pageErr, bucket)
 		}
-
-		for _, item := range resp.Segment.BlobItems {
-			if item.Name == nil {
-				continue
-			}
-
-			var size int64
-			ct := ""
-			etag := ""
-			var lastMod time.Time
-
-			if item.Properties != nil {
-				if item.Properties.ContentLength != nil {
-					size = *item.Properties.ContentLength
-				}
-				if item.Properties.ContentType != nil {
-					ct = *item.Properties.ContentType
-				}
-				if item.Properties.ETag != nil {
-					etag = string(*item.Properties.ETag)
-					etag = strings.Trim(etag, "\"")
-				}
-				if item.Properties.LastModified != nil {
-					lastMod = *item.Properties.LastModified
-				}
-			}
-
-			infos = append(infos, driver.ObjectInfo{
-				Key:          *item.Name,
-				Size:         size,
-				ContentType:  ct,
-				ETag:         etag,
-				LastModified: lastMod,
-			})
-
-			if len(infos) > maxKeys {
-				nextToken = infos[maxKeys-1].Key
-				infos = infos[:maxKeys]
-				goto done
+		items = resp.Segment.BlobItems
+		for _, p := range resp.Segment.BlobPrefixes {
+			if p != nil && p.Name != nil {
+				prefixes = append(prefixes, *p.Name)
 			}
 		}
+		next = resp.NextMarker
+	} else {
+		pager := containerClient.NewListBlobsFlatPager(&container.ListBlobsFlatOptions{
+			Prefix:     prefixPtr,
+			Marker:     markerPtr,
+			MaxResults: &maxResults,
+		})
+		resp, pageErr := pager.NextPage(ctx)
+		if pageErr != nil {
+			return nil, d.listErr(pageErr, bucket)
+		}
+		items = resp.Segment.BlobItems
+		next = resp.NextMarker
 	}
 
-done:
+	infos := make([]driver.ObjectInfo, 0, len(items))
+	for _, item := range items {
+		if item == nil || item.Name == nil {
+			continue
+		}
+		infos = append(infos, blobItemToInfo(item))
+	}
+
 	sort.Slice(infos, func(i, j int) bool {
 		return infos[i].Key < infos[j].Key
 	})
+	sort.Strings(prefixes)
 
-	return driver.NewObjectIterator(infos, nextToken), nil
+	nextToken := ""
+	if next != nil {
+		nextToken = *next
+	}
+
+	return driver.NewObjectIteratorWithPrefixes(infos, prefixes, nextToken), nil
+}
+
+// listErr classifies a list failure the way every other operation does.
+func (d *AzureDriver) listErr(err error, bucket string) error {
+	if cErr := classifyErr(err, bucket, ""); cErr != nil {
+		return cErr
+	}
+	return fmt.Errorf("azuredriver: list bucket %q: %w", bucket, err)
+}
+
+// blobItemToInfo maps one listed blob to the driver's object info.
+func blobItemToInfo(item *container.BlobItem) driver.ObjectInfo {
+	info := driver.ObjectInfo{Key: *item.Name}
+	if p := item.Properties; p != nil {
+		if p.ContentLength != nil {
+			info.Size = *p.ContentLength
+		}
+		if p.ContentType != nil {
+			info.ContentType = *p.ContentType
+		}
+		if p.ETag != nil {
+			info.ETag = strings.Trim(string(*p.ETag), "\"")
+		}
+		if p.LastModified != nil {
+			info.LastModified = *p.LastModified
+		}
+	}
+	return info
 }
 
 // Copy copies an object within or across containers.
