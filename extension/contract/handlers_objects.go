@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/driver"
-	"github.com/xraph/trove/middleware"
 )
 
 const (
@@ -226,31 +226,27 @@ type objectsCopyInput struct {
 	Overwrite bool   `json:"overwrite"`
 }
 
-// pipelineSignature describes the middleware that runs for a key in both
-// directions, in order, so two keys can be compared.
-func pipelineSignature(ctx context.Context, t *trove.Trove, bucket, key string) string {
-	var b strings.Builder
-	for _, dir := range []struct {
-		label string
-		rows  []middlewareRow
-	}{
-		{"write:", matching(ctx, t, bucket, key, middleware.DirectionWrite)},
-		{"read:", matching(ctx, t, bucket, key, middleware.DirectionRead)},
-	} {
-		b.WriteString(dir.label)
-		for _, r := range dir.rows {
-			b.WriteString(r.Name)
-			b.WriteByte(',')
+// sameDriver reports whether a and b are the same driver. Drivers are
+// pointers in practice. A dynamic type that cannot be compared, or whose
+// comparison panics, counts as different.
+func sameDriver(a, b driver.Driver) (same bool) {
+	defer func() {
+		if recover() != nil {
+			same = false
 		}
-		b.WriteByte(';')
+	}()
+	ta := reflect.TypeOf(a)
+	if ta == nil || ta != reflect.TypeOf(b) || !ta.Comparable() {
+		return false
 	}
-	return b.String()
+	return a == b
 }
 
-// objectsCopyHandler copies stored bytes. Copy runs no middleware, so it
-// refuses when the destination would run different middleware from the
-// source: compressed or encrypted bytes would land where nothing decodes
-// them.
+// objectsCopyHandler copies stored bytes. Copy runs no middleware and writes
+// the destination through the source key's driver, so it refuses when the
+// destination would be served by another backend, or would run different
+// middleware from the source: the bytes would land where nothing finds or
+// decodes them.
 func objectsCopyHandler(deps Deps) func(context.Context, objectsCopyInput, contract.Principal) (objectRow, error) {
 	return func(ctx context.Context, in objectsCopyInput, _ contract.Principal) (objectRow, error) {
 		for field, v := range map[string]string{"srcBucket": in.SrcBucket, "dstBucket": in.DstBucket} {
@@ -276,19 +272,28 @@ func objectsCopyHandler(deps Deps) func(context.Context, objectsCopyInput, contr
 		if _, err = t.Head(ctx, in.SrcBucket, in.SrcKey); err != nil {
 			return objectRow{}, deps.mapError("objects.copy", err)
 		}
-		if !in.Overwrite {
-			_, err = t.Head(ctx, in.DstBucket, in.DstKey)
-			if err == nil {
+		if !sameDriver(t.DriverFor(in.SrcBucket, in.SrcKey), t.DriverFor(in.DstBucket, in.DstKey)) {
+			return objectRow{}, conflict("The destination is served by a different backend. Copy writes through the source's backend, so the copy would not be found at the destination key.")
+		}
+		// Always look at the destination: a missing bucket must be refused
+		// whether or not overwrite is set, or a typo becomes a new bucket.
+		_, err = t.Head(ctx, in.DstBucket, in.DstKey)
+		switch {
+		case err == nil:
+			if !in.Overwrite {
 				return objectRow{}, &contract.Error{
 					Code: contract.CodeConflict, Message: "an object with this key already exists",
 					Details: map[string]any{"exists": true},
 				}
 			}
-			if !errors.Is(err, driver.ErrObjectNotFound) {
-				return objectRow{}, deps.mapError("objects.copy", err)
-			}
+		case errors.Is(err, driver.ErrBucketNotFound):
+			return objectRow{}, deps.mapError("objects.copy", err)
+		case errors.Is(err, driver.ErrObjectNotFound):
+			// The key is free.
+		default:
+			return objectRow{}, deps.mapError("objects.copy", err)
 		}
-		if pipelineSignature(ctx, t, in.SrcBucket, in.SrcKey) != pipelineSignature(ctx, t, in.DstBucket, in.DstKey) {
+		if !samePipeline(ctx, t, in.SrcBucket, in.SrcKey, in.DstBucket, in.DstKey) {
 			return objectRow{}, conflict("Different middleware applies to the destination. Copy moves stored bytes without running middleware, so the copy would not read back correctly.")
 		}
 		info, err := t.Copy(ctx, in.SrcBucket, in.SrcKey, in.DstBucket, in.DstKey)

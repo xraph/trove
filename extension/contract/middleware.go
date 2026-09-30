@@ -2,6 +2,7 @@ package contract
 
 import (
 	"context"
+	"reflect"
 	"sort"
 
 	"github.com/xraph/trove"
@@ -95,16 +96,28 @@ func scopeHas(s middleware.Scope, pred func(middleware.Scope) bool) bool {
 	return false
 }
 
+// matchingRegs returns the registrations that run for bucket and key in
+// direction dir, in run order. matching builds its rows from it, so the two
+// cannot disagree.
+func matchingRegs(ctx context.Context, t *trove.Trove, bucket, key string, dir middleware.Direction) []middleware.Registration {
+	regs := []middleware.Registration{}
+	for _, r := range ordered(t) {
+		if runs(r, dir) && scopeOf(r).Match(ctx, bucket, key) {
+			regs = append(regs, r)
+		}
+	}
+	return regs
+}
+
 // matching returns the registrations that run for bucket and key in
 // direction dir, in run order. It evaluates scopes now, so it describes
 // the current configuration, never how an existing object was written:
 // Trove records nothing per object.
 func matching(ctx context.Context, t *trove.Trove, bucket, key string, dir middleware.Direction) []middlewareRow {
-	rows := []middlewareRow{}
-	for _, r := range ordered(t) {
-		if runs(r, dir) && scopeOf(r).Match(ctx, bucket, key) {
-			rows = append(rows, rowOf(r))
-		}
+	regs := matchingRegs(ctx, t, bucket, key, dir)
+	rows := make([]middlewareRow, 0, len(regs))
+	for _, r := range regs {
+		rows = append(rows, rowOf(r))
 	}
 	return rows
 }
@@ -113,4 +126,34 @@ func matching(ctx context.Context, t *trove.Trove, bucket, key string, dir middl
 // either direction, once each, in run order.
 func matchingAny(ctx context.Context, t *trove.Trove, bucket, key string) []middlewareRow {
 	return matching(ctx, t, bucket, key, middleware.DirectionReadWrite)
+}
+
+// sameMiddleware reports whether a and b are the same middleware instance.
+// Two instances of one type can be configured differently (encrypt with two
+// keys), so only pointer identity counts. A middleware that is not a pointer
+// compares as different, which errs toward refusing.
+func sameMiddleware(a, b middleware.Middleware) bool {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	if va.Kind() != reflect.Pointer || vb.Kind() != reflect.Pointer || va.Type() != vb.Type() {
+		return false
+	}
+	return va.Pointer() == vb.Pointer()
+}
+
+// samePipeline reports whether the same middleware instances run, in the
+// same order, in both directions for the two keys.
+func samePipeline(ctx context.Context, t *trove.Trove, srcBucket, srcKey, dstBucket, dstKey string) bool {
+	for _, dir := range []middleware.Direction{middleware.DirectionWrite, middleware.DirectionRead} {
+		a := matchingRegs(ctx, t, srcBucket, srcKey, dir)
+		b := matchingRegs(ctx, t, dstBucket, dstKey, dir)
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if !sameMiddleware(a[i].Middleware, b[i].Middleware) {
+				return false
+			}
+		}
+	}
+	return true
 }

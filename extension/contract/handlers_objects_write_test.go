@@ -2,12 +2,15 @@ package contract
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
 	"github.com/xraph/trove/driver"
+	"github.com/xraph/trove/drivers/localdriver"
 	"github.com/xraph/trove/drivers/memdriver"
 	"github.com/xraph/trove/middleware"
 	"github.com/xraph/trove/middleware/compress"
@@ -158,5 +161,118 @@ func TestObjectsPresign_SignsWithTheRoutedDriver(t *testing.T) {
 	out, err := h(context.Background(), objectsPresignInput{Bucket: "data", Key: "app.txt"}, principalFor("u"))
 	if err != nil || out.URL != "https://signed.example/data/app.txt" {
 		t.Fatalf("presign on the default key = %+v, %v", out, err)
+	}
+}
+
+// TestObjectsCopy_RefusesAcrossBackends routes *.log to a second backend.
+// Copy writes through the source key's driver, so a.txt copied to a.log
+// would land on the default backend where a.log is never looked up.
+func TestObjectsCopy_RefusesAcrossBackends(t *testing.T) {
+	def := memdriver.New()
+	if err := def.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open default: %v", err)
+	}
+	archive := memdriver.New()
+	if err := archive.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	tv := openTrove(t, def, trove.WithBackend("archive", archive), trove.WithRoute("*.log", "archive"))
+	mustBucket(t, tv, "data")
+	if err := archive.CreateBucket(context.Background(), "data"); err != nil {
+		t.Fatalf("create bucket on the routed backend: %v", err)
+	}
+	put(t, tv, "data", "a.txt", "x")
+	deps := testDeps(t, newStores(tv))
+	h := objectsCopyHandler(deps)
+
+	_, err := h(context.Background(), objectsCopyInput{SrcBucket: "data", SrcKey: "a.txt", DstBucket: "data", DstKey: "a.log"}, principalFor("u"))
+	if codeOf(err) != "CONFLICT" {
+		t.Fatalf("copy across backends = %v, want CONFLICT", err)
+	}
+	if _, err := def.Head(context.Background(), "data", "a.log"); err == nil {
+		t.Fatal("the refused copy wrote a.log to the source backend")
+	}
+	if _, err := archive.Head(context.Background(), "data", "a.log"); err == nil {
+		t.Fatal("the refused copy wrote a.log to the routed backend")
+	}
+
+	// Two keys on the same routed backend still copy.
+	put(t, tv, "data", "b.log", "y")
+	if _, err := h(context.Background(), objectsCopyInput{SrcBucket: "data", SrcKey: "b.log", DstBucket: "data", DstKey: "c.log"}, principalFor("u")); err != nil {
+		t.Fatalf("copy within one routed backend: %v", err)
+	}
+}
+
+// TestObjectsCopy_ComparesMiddlewareInstances scopes two separate
+// instances of one middleware type to different buckets. They share a
+// name but not a configuration, so the guard must treat them as different.
+func TestObjectsCopy_ComparesMiddlewareInstances(t *testing.T) {
+	tv := openMem(t,
+		trove.WithScopedMiddleware(middleware.ForBuckets("x"), compress.New()),
+		trove.WithScopedMiddleware(middleware.ForBuckets("y"), compress.New()),
+	)
+	mustBucket(t, tv, "x")
+	mustBucket(t, tv, "y")
+	put(t, tv, "x", "k", strings.Repeat("hello ", 400))
+	deps := testDeps(t, newStores(tv))
+	_, err := objectsCopyHandler(deps)(context.Background(),
+		objectsCopyInput{SrcBucket: "x", SrcKey: "k", DstBucket: "y", DstKey: "k"}, principalFor("u"))
+	if codeOf(err) != "CONFLICT" {
+		t.Fatalf("copy across two instances of one middleware = %v, want CONFLICT", err)
+	}
+	if _, headErr := tv.Head(context.Background(), "y", "k"); headErr == nil {
+		t.Fatal("the refused copy wrote the object anyway")
+	}
+}
+
+// TestObjectsCopy_AllowsOneMiddlewareInstance checks the guard does not
+// refuse when one instance covers both source and destination.
+func TestObjectsCopy_AllowsOneMiddlewareInstance(t *testing.T) {
+	tv := openMem(t, trove.WithScopedMiddleware(middleware.ForBuckets("x", "y"), compress.New()))
+	mustBucket(t, tv, "x")
+	mustBucket(t, tv, "y")
+	put(t, tv, "x", "k", strings.Repeat("hello ", 400))
+	deps := testDeps(t, newStores(tv))
+	if _, err := objectsCopyHandler(deps)(context.Background(),
+		objectsCopyInput{SrcBucket: "x", SrcKey: "k", DstBucket: "y", DstKey: "k"}, principalFor("u")); err != nil {
+		t.Fatalf("copy under one shared instance: %v", err)
+	}
+}
+
+func TestObjectsCopy_MissingDestinationBucket(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, open opener) {
+		tv := open(t)
+		mustBucket(t, tv, "src")
+		put(t, tv, "src", "a.txt", "hello")
+		h := objectsCopyHandler(testDeps(t, newStores(tv)))
+		for _, overwrite := range []bool{false, true} {
+			_, err := h(context.Background(), objectsCopyInput{SrcBucket: "src", SrcKey: "a.txt", DstBucket: "typo", DstKey: "a.txt", Overwrite: overwrite}, principalFor("u"))
+			if codeOf(err) != "NOT_FOUND" || !strings.Contains(err.Error(), "bucket not found") {
+				t.Fatalf("copy to a missing bucket (overwrite=%v) = %v, want NOT_FOUND bucket not found", overwrite, err)
+			}
+		}
+	})
+}
+
+// TestObjectsCopy_MissingDestinationBucketCreatesNothingOnDisk makes sure a
+// refused copy leaves no directory behind on localdriver, which would
+// otherwise MkdirAll the typo.
+func TestObjectsCopy_MissingDestinationBucketCreatesNothingOnDisk(t *testing.T) {
+	root := t.TempDir()
+	drv := localdriver.New()
+	if err := drv.Open(context.Background(), "file://"+root); err != nil {
+		t.Fatalf("open localdriver: %v", err)
+	}
+	tv := openTrove(t, drv)
+	mustBucket(t, tv, "src")
+	put(t, tv, "src", "a.txt", "hello")
+	h := objectsCopyHandler(testDeps(t, newStores(tv)))
+	for _, overwrite := range []bool{false, true} {
+		if _, err := h(context.Background(), objectsCopyInput{SrcBucket: "src", SrcKey: "a.txt", DstBucket: "typo", DstKey: "a.txt", Overwrite: overwrite}, principalFor("u")); codeOf(err) != "NOT_FOUND" {
+			t.Fatalf("overwrite=%v: %v, want NOT_FOUND", overwrite, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, "typo")); !os.IsNotExist(err) {
+			t.Fatalf("overwrite=%v: the typo directory exists (stat err %v)", overwrite, err)
+		}
 	}
 }
