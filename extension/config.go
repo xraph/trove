@@ -2,6 +2,7 @@ package extension
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/xraph/trove"
 )
@@ -43,6 +44,21 @@ type Config struct {
 	// If empty, the first entry in Stores is the default.
 	Default string `json:"default" yaml:"default" mapstructure:"default"`
 
+	// DashboardContentPath is where the dashboard's content route mounts.
+	// It sits under the dashboard's own base path so the proxy that
+	// forwards the dashboard forwards this too.
+	DashboardContentPath string `json:"dashboard_content_path" yaml:"dashboard_content_path" mapstructure:"dashboard_content_path"`
+
+	// DashboardMaxUploadBytes is the largest upload the dashboard accepts.
+	// Every Trove middleware buffers a whole object in memory, which is why
+	// the default is 64 MiB.
+	DashboardMaxUploadBytes int64 `json:"dashboard_max_upload_bytes" yaml:"dashboard_max_upload_bytes" mapstructure:"dashboard_max_upload_bytes"`
+
+	// DashboardContentSecret signs content tickets, at least 32 bytes. When
+	// empty, a random key is generated at start, which works only while
+	// every request reaches the same instance.
+	DashboardContentSecret string `json:"dashboard_content_secret" yaml:"dashboard_content_secret" mapstructure:"dashboard_content_secret"`
+
 	// RequireConfig causes Register() to fail if YAML config is missing.
 	RequireConfig bool `json:"-" yaml:"-"`
 }
@@ -75,8 +91,10 @@ type FileStoreConfig struct {
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		BasePath:      "/trove",
-		DefaultBucket: "default",
+		BasePath:                "/trove",
+		DefaultBucket:           "default",
+		DashboardContentPath:    "/dashboard/trove/content",
+		DashboardMaxUploadBytes: 64 << 20,
 	}
 }
 
@@ -101,6 +119,16 @@ func (c *Config) Validate() error {
 		if !seen[c.Default] {
 			return fmt.Errorf("trove: default store %q not found in stores list", c.Default)
 		}
+	}
+
+	if c.DashboardContentSecret != "" && len(c.DashboardContentSecret) < 32 {
+		return fmt.Errorf("trove: dashboard_content_secret must be at least 32 bytes")
+	}
+	if c.DashboardMaxUploadBytes < 0 {
+		return fmt.Errorf("trove: dashboard_max_upload_bytes cannot be negative")
+	}
+	if c.DashboardContentPath != "" && !strings.HasPrefix(c.DashboardContentPath, "/") {
+		return fmt.Errorf("trove: dashboard_content_path must start with /")
 	}
 
 	return nil

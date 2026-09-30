@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/trove/driver"
 	_ "github.com/xraph/trove/drivers/localdriver" // register "file" and "local" schemes
 	"github.com/xraph/trove/drivers/memdriver"
+	trovecontract "github.com/xraph/trove/extension/contract"
 	trovedash "github.com/xraph/trove/extension/dashboard"
 	"github.com/xraph/trove/extension/store"
 	mongostore "github.com/xraph/trove/extension/store/mongo"
@@ -57,6 +58,10 @@ type Extension struct {
 	defaultStore string
 	manager      *TroveManager
 	storeOpts    map[string][]trove.Option
+
+	// Dashboard contract state, built at the end of Register.
+	dashStores  *trovecontract.Stores
+	dashContent *trovecontract.Content
 }
 
 // New creates a new Trove extension.
@@ -98,6 +103,14 @@ func (e *Extension) registerSingleStore(fapp forge.App) error {
 		return err
 	}
 
+	if err := e.setupDashboard(fapp, trovecontract.NewSingleStore(e.t, trovecontract.Flags{
+		Encryption:  e.config.EnableEncryption,
+		Compression: e.config.EnableCompression,
+		CAS:         e.config.EnableCAS,
+	})); err != nil {
+		return err
+	}
+
 	return vessel.Provide(fapp.Container(), func() (*trove.Trove, error) {
 		return e.t, nil
 	})
@@ -109,6 +122,8 @@ func (e *Extension) registerMultiStore(fapp forge.App) error {
 
 	// Merge programmatic entries with config entries.
 	entries := e.buildFileStoreEntries()
+
+	var dashStores []trovecontract.Store
 
 	// Initialize each store.
 	for _, entry := range entries {
@@ -156,6 +171,15 @@ func (e *Extension) registerMultiStore(fapp forge.App) error {
 		}
 
 		mgr.Add(entry.name, t, metaStore)
+		dashStores = append(dashStores, trovecontract.Store{
+			Name:  entry.name,
+			Trove: t,
+			Configured: trovecontract.Flags{
+				Encryption:  entry.enableEncrypt,
+				Compression: entry.enableCompress,
+				CAS:         entry.enableCAS,
+			},
+		})
 
 		e.Logger().Info("trove: store opened",
 			forge.F("name", entry.name),
@@ -169,6 +193,14 @@ func (e *Extension) registerMultiStore(fapp forge.App) error {
 		if err := mgr.SetDefault(defaultName); err != nil {
 			return fmt.Errorf("trove: set default store: %w", err)
 		}
+	}
+
+	resolver, dashErr := trovecontract.NewStores(defaultName, dashStores)
+	if dashErr != nil {
+		return fmt.Errorf("trove: dashboard stores: %w", dashErr)
+	}
+	if setupErr := e.setupDashboard(fapp, resolver); setupErr != nil {
+		return setupErr
 	}
 
 	e.manager = mgr
@@ -386,6 +418,12 @@ func (e *Extension) mergeWithDefaults(cfg Config) Config {
 	if cfg.DefaultBucket == "" {
 		cfg.DefaultBucket = defaults.DefaultBucket
 	}
+	if cfg.DashboardContentPath == "" {
+		cfg.DashboardContentPath = defaults.DashboardContentPath
+	}
+	if cfg.DashboardMaxUploadBytes == 0 {
+		cfg.DashboardMaxUploadBytes = defaults.DashboardMaxUploadBytes
+	}
 	return cfg
 }
 
@@ -425,6 +463,15 @@ func (e *Extension) mergeConfigurations(yamlConfig, programmaticConfig Config) C
 	}
 	if yamlConfig.Default == "" && programmaticConfig.Default != "" {
 		yamlConfig.Default = programmaticConfig.Default
+	}
+	if yamlConfig.DashboardContentPath == "" && programmaticConfig.DashboardContentPath != "" {
+		yamlConfig.DashboardContentPath = programmaticConfig.DashboardContentPath
+	}
+	if yamlConfig.DashboardMaxUploadBytes == 0 && programmaticConfig.DashboardMaxUploadBytes != 0 {
+		yamlConfig.DashboardMaxUploadBytes = programmaticConfig.DashboardMaxUploadBytes
+	}
+	if yamlConfig.DashboardContentSecret == "" && programmaticConfig.DashboardContentSecret != "" {
+		yamlConfig.DashboardContentSecret = programmaticConfig.DashboardContentSecret
 	}
 
 	return e.mergeWithDefaults(yamlConfig)
