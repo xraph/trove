@@ -130,6 +130,10 @@ func (c *Config) Validate() error {
 	if c.DashboardContentPath != "" && !strings.HasPrefix(c.DashboardContentPath, "/") {
 		return fmt.Errorf("trove: dashboard_content_path must start with /")
 	}
+	// "/" would mount /* and swallow every request no other route matched.
+	if c.DashboardContentPath != "" && strings.Trim(c.DashboardContentPath, "/") == "" {
+		return fmt.Errorf("trove: dashboard_content_path needs at least one path segment after the /")
+	}
 
 	return nil
 }

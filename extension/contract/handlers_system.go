@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/xraph/forge"
 	"github.com/xraph/forge/extensions/dashboard/contract"
@@ -11,6 +12,9 @@ import (
 	"github.com/xraph/trove/driver"
 	"github.com/xraph/trove/middleware"
 )
+
+// healthTimeout bounds the health ping in system.status.
+const healthTimeout = 5 * time.Second
 
 // storeInput is the input of every intent that takes only a store.
 type storeInput struct {
@@ -88,8 +92,11 @@ func systemStatusHandler(deps Deps) func(context.Context, storeInput, contract.P
 		drv := t.Driver()
 		name := drv.Name()
 
+		// A backend that never answers must not hold the page open.
+		pingCtx, cancel := context.WithTimeout(ctx, healthTimeout)
+		defer cancel()
 		h := health{OK: true}
-		if err := t.Health(ctx); err != nil {
+		if err := t.Health(pingCtx); err != nil {
 			h = health{OK: false, Error: optString("The driver did not answer a ping.")}
 			if deps.Logger != nil {
 				deps.Logger.Warn("trove/contract: store failed its health check",

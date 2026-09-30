@@ -114,6 +114,14 @@ func TestBeginUpload(t *testing.T) {
 	if _, err := h(ctx, beginUploadInput{Bucket: "data", Size: 1}, principalFor("u")); codeOf(err) != "BAD_REQUEST" {
 		t.Errorf("no key = %v", err)
 	}
+	for _, ct := range []string{"not a type", "text/plain; charset", "text/html\r\nX-Injected: 1"} {
+		if _, err := h(ctx, beginUploadInput{Bucket: "data", Key: "typed.txt", Size: 1, ContentType: ct}, principalFor("u")); codeOf(err) != "BAD_REQUEST" {
+			t.Errorf("content type %q = %v, want BAD_REQUEST", ct, err)
+		}
+	}
+	if _, err := h(ctx, beginUploadInput{Bucket: "data", Key: "typed.txt", Size: 1, ContentType: "text/plain; charset=utf-8"}, principalFor("u")); err != nil {
+		t.Errorf("a valid content type with parameters = %v", err)
+	}
 }
 
 func TestBeginUpload_RefusesTheCASBucket(t *testing.T) {

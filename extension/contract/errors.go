@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -47,6 +48,10 @@ func mapError(err error) error {
 		return badRequest("key is required")
 	case errors.Is(err, trove.ErrBucketEmpty):
 		return badRequest("bucket is required")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		// A page that navigates away cancels its requests. That is
+		// routine, so it is retryable and never logged as an error.
+		return &contract.Error{Code: contract.CodeUnavailable, Message: "the request was cancelled or timed out", Retryable: true}
 	default:
 		return &contract.Error{Code: contract.CodeInternal, Message: "an internal error occurred"}
 	}

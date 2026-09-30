@@ -30,6 +30,9 @@ func TestConfigValidate_DashboardContent(t *testing.T) {
 		func(c *Config) { c.DashboardContentSecret = "short" },
 		func(c *Config) { c.DashboardMaxUploadBytes = -1 },
 		func(c *Config) { c.DashboardContentPath = "dashboard/no-slash" },
+		// "/" would mount /* and swallow every route nothing else matched.
+		func(c *Config) { c.DashboardContentPath = "/" },
+		func(c *Config) { c.DashboardContentPath = "//" },
 	}
 	for i, mutate := range bad {
 		cfg := DefaultConfig()

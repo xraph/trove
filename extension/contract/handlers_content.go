@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"strings"
 	"time"
 
@@ -99,6 +100,13 @@ func objectsBeginUploadHandler(deps Deps) func(context.Context, beginUploadInput
 		}
 		if in.Size < 0 {
 			return uploadOutput{}, badRequest("size cannot be negative")
+		}
+		if in.ContentType != "" {
+			// The type is stored and later served as the Content-Type
+			// header, so it has to parse as one.
+			if _, _, err := mime.ParseMediaType(in.ContentType); err != nil {
+				return uploadOutput{}, badRequest("contentType is not a valid media type")
+			}
 		}
 		if in.Size > deps.Content.MaxUploadBytes {
 			return uploadOutput{}, &contract.Error{

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
@@ -227,5 +228,37 @@ func TestSystemStatus_SaysWhenAStoreIsRouted(t *testing.T) {
 	want := "This store routes some keys to other backends. Listings, bucket operations and health describe the default backend only."
 	if routed.RoutingNote == nil || *routed.RoutingNote != want {
 		t.Fatalf("routingNote = %v, want %q", routed.RoutingNote, want)
+	}
+}
+
+// deadlinePing is a memdriver whose Ping records the deadline it was given.
+type deadlinePing struct {
+	*memdriver.MemDriver
+	deadline time.Time
+	has      bool
+}
+
+func (d *deadlinePing) Ping(ctx context.Context) error {
+	d.deadline, d.has = ctx.Deadline()
+	return nil
+}
+
+// TestSystemStatus_HealthPingIsBounded makes sure a backend that never
+// answers cannot hold system.status open: the ping gets its own deadline
+// even when the request has none.
+func TestSystemStatus_HealthPingIsBounded(t *testing.T) {
+	drv := &deadlinePing{MemDriver: memdriver.New()}
+	if err := drv.Open(context.Background(), ""); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	start := time.Now()
+	if _, err := systemStatusHandler(testDeps(t, newStores(openTrove(t, drv))))(context.Background(), storeInput{}, principalFor("u")); err != nil {
+		t.Fatalf("system.status: %v", err)
+	}
+	if !drv.has {
+		t.Fatal("the health ping ran with no deadline")
+	}
+	if left := drv.deadline.Sub(start); left <= 0 || left > 5*time.Second+time.Second {
+		t.Fatalf("ping deadline %v after the call, want about 5s", left)
 	}
 }

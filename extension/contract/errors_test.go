@@ -1,11 +1,13 @@
 package contract
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
 
 	dashcontract "github.com/xraph/forge/extensions/dashboard/contract"
+	"github.com/xraph/go-utils/log"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
@@ -75,5 +77,23 @@ func TestRequireName(t *testing.T) {
 		if codeOf(requireName("bucket", v)) != dashcontract.CodeBadRequest {
 			t.Errorf("requireName(%q) accepted it", v)
 		}
+	}
+}
+
+// TestMapError_CancelledRequestIsRetryableAndQuiet covers a page that
+// navigates away mid-request. That is routine, so it maps to a retryable
+// UNAVAILABLE and never reaches the error log.
+func TestMapError_CancelledRequestIsRetryableAndQuiet(t *testing.T) {
+	logger := log.NewTestLogger()
+	deps := Deps{Logger: logger}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		err := deps.mapError("objects.list", fmt.Errorf("memdriver: list: %w", cause))
+		var ce *dashcontract.Error
+		if !errors.As(err, &ce) || ce.Code != dashcontract.CodeUnavailable || !ce.Retryable {
+			t.Errorf("mapError(%v) = %+v, want a retryable UNAVAILABLE", cause, ce)
+		}
+	}
+	if entries := logger.(*log.TestLogger).GetLogsByLevel("ERROR"); len(entries) != 0 {
+		t.Fatalf("error entries = %d, want none for a cancelled request", len(entries))
 	}
 }
