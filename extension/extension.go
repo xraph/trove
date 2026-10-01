@@ -6,8 +6,6 @@ import (
 	"fmt"
 
 	"github.com/xraph/forge"
-	dashboard "github.com/xraph/forge/extensions/dashboard"
-	"github.com/xraph/forge/extensions/dashboard/contributor"
 	"github.com/xraph/vessel"
 
 	"github.com/xraph/trove"
@@ -16,7 +14,6 @@ import (
 	_ "github.com/xraph/trove/drivers/localdriver" // register "file" and "local" schemes
 	"github.com/xraph/trove/drivers/memdriver"
 	trovecontract "github.com/xraph/trove/extension/contract"
-	trovedash "github.com/xraph/trove/extension/dashboard"
 	"github.com/xraph/trove/extension/store"
 	mongostore "github.com/xraph/trove/extension/store/mongo"
 	pgstore "github.com/xraph/trove/extension/store/postgres"
@@ -38,10 +35,7 @@ const (
 )
 
 // Compile-time interface checks.
-var (
-	_ forge.Extension          = (*Extension)(nil)
-	_ dashboard.DashboardAware = (*Extension)(nil)
-)
+var _ forge.Extension = (*Extension)(nil)
 
 // Extension implements the Forge extension lifecycle for Trove.
 type Extension struct {
@@ -329,29 +323,6 @@ func (e *Extension) Store() store.Store {
 // Returns nil in single-store mode.
 func (e *Extension) Manager() *TroveManager {
 	return e.manager
-}
-
-// DashboardContributor implements dashboard.DashboardAware. It returns a
-// LocalContributor that renders trove pages, widgets, and settings in the
-// Forge dashboard using templ + ForgeUI.
-func (e *Extension) DashboardContributor() contributor.LocalContributor {
-	// Check if driver supports presigned URLs.
-	_, presignSupported := e.t.Driver().(driver.PresignDriver)
-
-	return trovedash.New(
-		trovedash.NewManifest(),
-		e.store,
-		e.t,
-		trovedash.ContributorConfig{
-			StorageDriver:    e.config.StorageDriver,
-			BasePath:         e.config.BasePath,
-			DefaultBucket:    e.config.DefaultBucket,
-			CASEnabled:       e.config.EnableCAS,
-			Encryption:       e.config.EnableEncryption,
-			Compression:      e.config.EnableCompression,
-			PresignSupported: presignSupported,
-		},
-	)
 }
 
 // --- Internal helpers ---
