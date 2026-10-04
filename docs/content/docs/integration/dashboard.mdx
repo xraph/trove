@@ -3,7 +3,7 @@ title: "Dashboard"
 description: "Browse and manage storage from the Forge dashboard's React shell."
 ---
 
-Trove's dashboard is a React plugin, `@forge-go/dashboard-plugin-trove`, that runs inside the Forge dashboard's shell. It reads your storage drivers through Trove's `trove` contract contributor, so what you see is what the driver reports, not a copy kept somewhere else.
+Trove's dashboard is a React plugin, `@forge-go/dashboard-plugin-trove`, that runs inside the Forge dashboard's shell. It reads your storage drivers through Trove's `trove` contract contributor, so every list comes straight from the driver.
 
 ## Turning it on
 
@@ -66,7 +66,7 @@ The driver's own list of buckets, with a Created column (or Last modified, on dr
 
 ### Bucket browser
 
-This is where most of your time goes. The listing shows one prefix at a time. Folders come from the driver's common prefixes, and each is a link. Objects show their stored size, which is the size after compression or encryption, and their last modified time. Load more follows the driver's cursor, and the path bar lets you type a prefix to filter by.
+Most of your time goes here. The listing shows one prefix at a time. Folders come from the driver's common prefixes, and each is a link. Objects show their stored size, which is the size after compression or encryption, and their last modified time. Load more follows the driver's cursor, and the path bar lets you type a prefix to filter by.
 
 Click an object and the inspector opens beside the listing. It shows the stored size, ETag, content type, storage class, version, last modified, and the user metadata the driver stored (read-only). It also shows which middleware matches the key under today's config. Trove doesn't record how an object was written, so that line describes the config now, not history.
 
@@ -83,17 +83,17 @@ To upload, drop files anywhere on the listing or use Upload files in the header.
 
 ### Middleware
 
-Every middleware registered on the store, in the order it runs, with its direction, scope and priority. Type a bucket and a key into the form and press Test, and two more columns show which middleware runs on write and which on read for that object. It's the quickest way to check what a given key will go through before you upload it.
+Every middleware registered on the store, in the order it runs, with its direction, scope and priority. Type a bucket and a key into the form and press Test, and two more columns show which middleware runs on write and which on read for that object. Use it to check what a key will go through before you upload to it.
 
 ### CAS
 
 When CAS is on, you see the algorithm, the bucket and where the index lives, then a paged list of entries (100 a page) with hash, stored size, reference count and state. A state is one of Pinned, GC candidate, Indexed, or Not indexed for a blob the index doesn't know. Pin and Unpin act on the engine's index. Run garbage collection asks first and reports how many entries it scanned, deleted and freed.
 
-Two limits are stated on the page itself, and they're worth knowing. The index lives in memory, so a restart forgets every reference count and pin. And nothing in CAS lowers a reference count, so garbage collection finds nothing to collect today. With CAS off, the page just says so.
+The page states two limits. The index lives in memory, so a restart forgets every reference count and pin. And nothing in CAS lowers a reference count, so garbage collection finds nothing to collect today. With CAS off, the page just says so.
 
 ### Transfers
 
-The streams open in this process, from the stream pool: the object, direction, state, bytes transferred and expected size. It refreshes every five seconds. Nothing is saved, so a restart clears it, and "No streams open." is the usual state.
+The streams open in this process, from the stream pool: the object, direction, state, bytes transferred and expected size. It refreshes every five seconds. Nothing is saved, so a restart clears the list.
 
 ## How bytes move
 
@@ -107,10 +107,10 @@ Object bytes never travel inside the contract envelope. They go through the cont
 
 Downloads ride in the query string because a plain `<a download>` can't send a header. Uploads use the header, and a PUT that carries `?t=` is refused. The split exists because Forge's dashboard tracing records query strings, so a download ticket can show up in the Traces view for its 60 seconds of life. It's read-only and short, which is why we accepted that.
 
-The route always answers with `Content-Disposition: attachment`, so a browser saves what it gets and never renders it. The preview works by fetching the bytes from script and drawing them itself, and the plugin never shows bytes inline from the route. `disable_routes` doesn't turn the content route off.
+The route always answers with `Content-Disposition: attachment`, so a browser saves what it gets and never renders it. The preview fetches the bytes from script and draws them itself. The plugin never shows bytes inline from the route. `disable_routes` doesn't turn the content route off.
 
-One caveat: the route doesn't work behind the Next.js proxy in `packages/next`. That proxy forwards only GET and POST, caps bodies at 1 MiB and reads every response as text, so uploads never arrive and binary downloads come back mangled. Use the Vite shell, or serve the dashboard from the Go server.
+The route doesn't work behind the Next.js proxy in `packages/next`. That proxy forwards only GET and POST, caps bodies at 1 MiB and reads every response as text, so uploads never arrive and binary downloads come back mangled. Use the Vite shell, or serve the dashboard from the Go server.
 
 ## Moving from the old dashboard
 
-The server-rendered pages are gone, along with the `extension/dashboard` package and its `DashboardAware` hook. If your own code imported `github.com/xraph/trove/extension/dashboard`, that import has to go. Some things were dropped on purpose, among them the object and storage counts, quotas, upload sessions and metadata and tag editing, because they read tables that normal operation never writes. [MIGRATION.md](https://github.com/xraph/trove/blob/main/MIGRATION.md) in the repo root lists every old page, column and action with what happened to it and why, and it records the bugs we found along the way.
+The server-rendered pages, the `extension/dashboard` package and its `DashboardAware` hook are gone, and if your own code imported `github.com/xraph/trove/extension/dashboard` that import has to go; [MIGRATION.md](https://github.com/xraph/trove/blob/main/MIGRATION.md) in the repo root lists every old page, column and action with what happened to it and why.
