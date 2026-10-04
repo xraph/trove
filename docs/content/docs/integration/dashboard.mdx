@@ -109,7 +109,7 @@ Downloads ride in the query string because a plain `<a download>` can't send a h
 
 The route always answers with `Content-Disposition: attachment`, so a browser saves what it gets and never renders it. The preview fetches the bytes from script and draws them itself. The plugin never shows bytes inline from the route. `disable_routes` doesn't turn the content route off.
 
-The route doesn't work behind the Next.js proxy in `packages/next`. That proxy forwards only GET and POST, caps bodies at 1 MiB and reads every response as text, so uploads never arrive and binary downloads come back mangled. Use the Vite shell, or serve the dashboard from the Go server.
+The route doesn't work behind the Next.js proxy, `@forge-go/dashboard-next` (`packages/next` in the forge-dashboard repo). That proxy forwards only GET and POST, caps bodies at 1 MiB and reads every response as text, so uploads never arrive and binary downloads come back mangled. Use the Vite shell, or serve the dashboard from the Go server.
 
 ## Moving from the old dashboard
 

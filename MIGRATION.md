@@ -15,8 +15,8 @@ below, and each one says whether it moved, changed or was dropped, and why.
 
 The cut happened in two steps. Commit 0ad27be stopped the extension from
 registering the templ dashboard, because forge main had already removed
-`DashboardAware` and the contributor package. The `extension/dashboard`
-package itself goes in a later commit, once this file is in.
+`DashboardAware` and the contributor package. Commit 2c2c22f deleted the
+`extension/dashboard` package, once this file was in.
 
 ## What you need to do
 
@@ -53,13 +53,14 @@ There are three new config keys:
 |---|---|---|
 | `dashboard_content_path` | `/dashboard/trove/content` | where the content route mounts, under the dashboard's own base path so the proxy that carries the dashboard carries this too |
 | `dashboard_max_upload_bytes` | 67108864 (64 MiB) | the largest file a dashboard upload accepts |
-| `dashboard_content_secret` | empty | the HMAC key that signs content tickets; empty means a random key per process |
+| `dashboard_content_secret` | empty | the HMAC key that signs content tickets; empty means a random key per process. Set it and it must be at least 32 bytes, or the app refuses to start |
 
 The 64 MiB cap is deliberate. Every Trove middleware buffers the whole object
 in memory, so raising it raises what one upload can cost you in RAM.
 
 Run more than one instance behind a load balancer and you have to set
-`dashboard_content_secret`. With it empty, each process makes its own key at
+`dashboard_content_secret`, to at least 32 bytes. A shorter one fails config
+validation and the app won't start. With it empty, each process makes its own key at
 start, and a ticket minted on one replica fails with a 403 on the next. The
 Overview tells you which mode you're in under "Content links".
 
@@ -74,7 +75,8 @@ its 60 seconds of life. It's read-only and short-lived, so we accepted that,
 but forge should redact `t` (see Still open). `disable_routes` does not turn the content route
 off.
 
-The content route does not work behind the Next.js proxy in `packages/next`.
+The content route does not work behind the Next.js proxy, which is
+`@forge-go/dashboard-next` (`packages/next` in the forge-dashboard repo).
 It forwards only GET and POST, caps a request body at 1 MiB, and reads every
 response as text. Uploads never reach Trove, and a binary download comes back
 mangled. Use the Vite shell, or serve the dashboard from the Go server.
@@ -216,9 +218,12 @@ The templ pages had bugs of their own, and those go with them:
   on your clipboard.
 - Saving object metadata wiped it. The form named its fields `metadata_key_N`
   and the handler read `meta_key_N`, so it always saved an empty map.
-- The Copy Key buttons built JavaScript by pasting the key into a quoted
-  string, so a key with a quote in it broke the button, and a crafted key could
-  run script in the operator's session.
+- The Copy Key button on the object detail page built JavaScript by pasting
+  the key into a quoted string, so a key with a quote in it broke the button,
+  and a crafted key could run script in the operator's session. The file
+  browser's copy button used the same pattern, but with the row ID (see the
+  Download and Copy item above), which Trove generates, so only the object
+  detail button could be broken or abused through a key.
 - The bucket search box sent a `query` parameter nothing read, and the quota
   table's Edit button sent `action=edit`, which no handler matched.
 - The buckets table's Driver column and the Settings page printed the
@@ -666,7 +671,7 @@ component is covered on the page that rendered it: `BucketTable` on Buckets,
 | `FormatTime` ("Never"), `FormatTimeShort` ("Never"), `FormatDate` ("N/A") | the kit's `Timestamp` | changed |
 | `TruncateHash` (12 characters) and `TruncateKey` (the last 37) | truncation by width, with the full value on hover | changed |
 | `ContentTypeIcon` | none | dropped |
-| The `...Exported` wrappers, `PinnedBadgeExported` among them, which nothing used | none | dropped |
+| The five `...Exported` wrappers. `PinnedBadgeExported` was the only one nothing used. The pages called the other four (`UploadStatusBadgeExported`, `DriverBadgeExported`, `BoolBadgeExported` and `FieldRowExported`) in place of the helpers they wrap, and each of those is covered on the page that used it | none | dropped |
 | A whole table row clickable through `hx-get` | the name cell is a link | changed |
 | Browser `hx-confirm` on deletes, Unpin and GC | `ConfirmDialog` where a command can't be undone. Errors show inside it, and it can't close while the command runs | changed |
 | htmx swaps of `#content` and `hx-push-url` | the shell's router | changed |
@@ -682,12 +687,20 @@ These are known gaps. None of them is a regression from the templ pages.
   forge's `dashboard/contract` imports `dashboard/auth`, which imports templ,
   in every released forge tag. forge main has dropped it and isn't released
   yet. Bumping forge once a release without it exists finishes the job.
+- forgeui is no longer a direct dependency of the extension, but
+  `extension/go.mod` still lists it as `// indirect`. The reason is
+  `extension/dashboard_aware_test.go`, which checks the extension against
+  forge's `ContractContributorAware`. That interface lives in forge's
+  `extensions/dashboard` package, and in forge v1.11.2 the package still
+  imports forgeui. Production code never imports it. Once forge's dashboard
+  root drops forgeui, the indirect line can go.
 - forge's dashboard tracing records the raw query string, so a download or
   preview ticket in `?t=` is readable in the Traces view for its 60 seconds.
   forge should redact the `t` parameter.
-- The content route doesn't work behind the Next.js proxy in `packages/next`,
+- The content route doesn't work behind the Next.js proxy,
+  `@forge-go/dashboard-next` (`packages/next` in the forge-dashboard repo),
   which forwards only GET and POST, caps request bodies at 1 MiB and reads
-  responses as text. That's `packages/next`'s to fix. Until then, use the Vite
+  responses as text. That's the proxy package's to fix. Until then, use the Vite
   shell or the Go server.
 - In a fresh Vite dev server, your first visit to a bucket can hit a
   dependency re-bundle of `react-resizable-panels`, the first plugin
