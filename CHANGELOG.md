@@ -7,7 +7,7 @@ All notable changes to Trove are documented in this file.
 ### Dashboard
 
 #### Removed
-- **The templ dashboard under `extension/dashboard/`.** If you import `github.com/xraph/trove/extension/dashboard`, that import has to go. The dashboard now lives in the Forge dashboard's React shell as `@forge-go/dashboard-plugin-trove`, and it reads the `trove` contract contributor. `MIGRATION.md` lists what moved, what changed and what was dropped. `github.com/xraph/forgeui` is no longer a dependency of `extension`.
+- **The templ dashboard under `extension/dashboard/`.** If you import `github.com/xraph/trove/extension/dashboard`, that import has to go. The dashboard now lives in the Forge dashboard's React shell as `@forge-go/dashboard-plugin-trove`, and it reads the `trove` contract contributor. `MIGRATION.md` lists what moved, what changed and what was dropped. `github.com/xraph/forgeui` is no longer a direct dependency of `extension`. It stays in `go.mod` as an indirect one only because a test checks the extension against forge's `ContractContributorAware` interface, and that package still imports forgeui in forge v1.11.2.
 
 ---
 
