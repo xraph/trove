@@ -1,77 +1,116 @@
 ---
-title: "Dashboard UI"
-description: "Built-in web dashboard for managing buckets, objects, uploads, CAS entries, and quotas."
+title: "Dashboard"
+description: "Browse and manage storage from the Forge dashboard's React shell."
 ---
 
-Trove includes a Forge Dashboard contributor that provides a web UI for managing all aspects of object storage. The dashboard gives operators visibility into buckets, objects, multipart uploads, content-addressable storage, and quota usage without writing code or using the REST API.
+Trove's dashboard is a React plugin, `@forge-go/dashboard-plugin-trove`, that runs inside the Forge dashboard's shell. It reads your storage drivers through Trove's `trove` contract contributor, so what you see is what the driver reports, not a copy kept somewhere else.
 
-## Enabling the Dashboard
+## Turning it on
 
-The dashboard is automatically registered when the Trove extension is used alongside the Forge Dashboard extension. No additional configuration is required:
+There's nothing to switch on in Go. The Trove extension registers its contract contributor with Forge's dashboard when it starts, and the shell finds it there. You do need Forge v1.11.2 or newer, because older versions never passed Trove's cache hints to the client, and an upload or delete wouldn't refresh the page you're looking at.
 
-```go
-import (
-    "github.com/xraph/forge"
-    dashboardext "github.com/xraph/forge/extensions/dashboard"
-    troveext "github.com/xraph/trove/extension"
-)
+On the shell side, add the plugin to your plugin list:
 
-app := forge.New(
-    forge.WithExtensions(
-        dashboardext.New(),
-        troveext.New(),
-    ),
-)
+```tsx
+import corePlugin from "@forge-go/dashboard-plugin-core"
+import trovePlugin from "@forge-go/dashboard-plugin-trove"
+
+const plugins = [corePlugin, trovePlugin]
 ```
 
-When both extensions are present, Trove registers its dashboard pages into the Forge dashboard automatically via DI auto-discovery.
+The pages mount at `/@trove`, under a nav group called Storage. They use Tailwind classes of their own, so your shell's stylesheet has to scan the package. If it declares sources with `@source`, add one for Trove next to the others:
 
-## Dashboard Pages
+```css
+@source "../../../packages/plugin-trove/src";
+```
+
+Adjust the path to wherever the package lives for you.
+
+## Configuration
+
+Three keys sit next to the rest of Trove's config under `extensions.trove`:
+
+```yaml
+extensions:
+  trove:
+    dashboard_content_path: "/dashboard/trove/content"
+    dashboard_max_upload_bytes: 67108864
+    dashboard_content_secret: ""
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `dashboard_content_path` | `/dashboard/trove/content` | Where the content route mounts. Keep it under the dashboard's own base path so whatever proxy carries the dashboard carries this too. It must start with `/`. |
+| `dashboard_max_upload_bytes` | `67108864` (64 MiB) | The largest file a dashboard upload accepts. |
+| `dashboard_content_secret` | empty | The HMAC key that signs content tickets. At least 32 bytes. Empty means a random key per process. |
+
+The 64 MiB cap is on purpose. Every Trove middleware buffers a whole object in memory, so a bigger cap means a bigger bill in RAM for each upload.
+
+Set the secret as soon as you run more than one instance behind a load balancer. With it empty, each process makes its own key at start, so a ticket minted on one replica gets a 403 on the next. The Overview page tells you which mode you're in under "Content links".
+
+## Pages
+
+If you run several stores, every page except the bucket browser has a store picker in its header. The browser takes its store from `?store=` in the URL, so a copied link opens the same store.
+
+No list shows a total. No driver can count or sum without reading every key, so captions say what's on screen, such as "214 shown, more under this prefix".
 
 ### Overview
 
-The landing page displays storage statistics at a glance: total objects, total bytes stored, active multipart uploads, CAS entries, and current quota usage across all tenants.
+The driver's name and whether it answers a health check come first, with the ping's error if it doesn't. After that you get a Protection table (encryption, compression, content scanning and CAS), and each row says whether the protection is configured and whether it's applied. Those can differ: turn on `enable_encryption` and the row reads "Configured, not applied", because nothing registers the encrypt middleware from that flag today. A list of what the driver can do follows (folders, presigned links, multipart, range reads, server-side copy, versioning, lifecycle rules, change notifications), then the active config: default bucket, chunk size, stream pool, upload limit, ETag behavior and content links.
+
+When the store routes some keys to other backends, a notice says so, since a listing on the default backend can miss them.
 
 ### Buckets
 
-List all buckets with object counts and total size. Create new buckets, view bucket details, and delete empty buckets. Each bucket links to its object listing.
+The driver's own list of buckets, with a Created column (or Last modified, on drivers that only know that). Create opens a dialog with one field, the name, and the driver decides which names it accepts. Delete asks first and works only on an empty bucket. Trove refuses a bucket that still holds objects, and it refuses the CAS bucket while CAS is on. A bucket name opens the browser.
 
-### Objects
+### Bucket browser
 
-Browse objects within a bucket. Upload new objects, download existing ones, view metadata (content type, size, checksums, tags), and delete objects. Supports prefix-based filtering for navigating large buckets.
+This is where most of your time goes. The listing shows one prefix at a time. Folders come from the driver's common prefixes, and each is a link. Objects show their stored size, which is the size after compression or encryption, and their last modified time. Load more follows the driver's cursor, and the path bar lets you type a prefix to filter by.
 
-### Uploads
+Click an object and the inspector opens beside the listing. It shows the stored size, ETag, content type, storage class, version, last modified, and the user metadata the driver stored (read-only). It also shows which middleware matches the key under today's config. Trove doesn't record how an object was written, so that line describes the config now, not history.
 
-Monitor active multipart uploads with progress indicators. View individual part status, elapsed time, and total size. Abort stale or abandoned uploads to reclaim storage.
+From the inspector you can:
+
+- Preview text and JSON in a read-only code view, capped at 256 KiB. Raster images load from a Blob. SVGs go through a `data:` URL. Anything else says there's no preview, and images over 4 MiB as stored aren't fetched at all.
+- Download the object.
+- Copy its key to the clipboard.
+- Make a share link, with a lifetime of 1 hour, 1 day or 7 days. It appears only where the driver can sign a link and no middleware applies to the key. Otherwise the inspector says why.
+- Copy it to another bucket, with the destination key prefilled. Trove refuses when the destination runs different middleware or sits on a different backend, and it asks before replacing a key that exists.
+- Delete it. The CAS bucket is the exception, because deleting a blob there would leave the index pointing at nothing.
+
+To upload, drop files anywhere on the listing or use Upload files in the header. An overlay names the bucket and folder while you drag. The upload tray keeps one row per file with its state, a progress bar and its own Cancel, and two files go at a time. A file over the limit fails on its own row before anything is sent. If the key already exists you pick Replace or Skip. Folders can't be dropped, only the files inside them. Uploads keep running while you move around the dashboard, but a full page reload drops them.
+
+### Middleware
+
+Every middleware registered on the store, in the order it runs, with its direction, scope and priority. Type a bucket and a key into the form and press Test, and two more columns show which middleware runs on write and which on read for that object. It's the quickest way to check what a given key will go through before you upload it.
 
 ### CAS
 
-View the content-addressable storage index with reference counts, content hashes, and total deduplicated bytes. Identify pinned entries that are exempt from garbage collection. Trigger manual GC runs to reclaim unreferenced content blocks.
+When CAS is on, you see the algorithm, the bucket and where the index lives, then a paged list of entries (100 a page) with hash, stored size, reference count and state. A state is one of Pinned, GC candidate, Indexed, or Not indexed for a blob the index doesn't know. Pin and Unpin act on the engine's index. Run garbage collection asks first and reports how many entries it scanned, deleted and freed.
 
-### Quotas
+Two limits are stated on the page itself, and they're worth knowing. The index lives in memory, so a restart forgets every reference count and pin. And nothing in CAS lowers a reference count, so garbage collection finds nothing to collect today. With CAS off, the page just says so.
 
-View per-tenant storage quotas with usage-versus-limit breakdowns. See which tenants are approaching their limits and manage quota assignments.
+### Transfers
 
-### Settings
+The streams open in this process, from the stream pool: the object, direction, state, bytes transferred and expected size. It refreshes every five seconds. Nothing is saved, so a restart clears it, and "No streams open." is the usual state.
 
-Inspect the active Trove configuration: driver DSN, base path, CAS algorithm, Grove database, and the current middleware pipeline. Useful for verifying runtime configuration in deployed environments.
+## How bytes move
 
-### File Browser
+Object bytes never travel inside the contract envelope. They go through the content route at `dashboard_content_path`, and a contract call mints a short-lived ticket to authorize each transfer.
 
-A hierarchical file browser for each bucket that supports common file operations: upload, download, copy, paste, rename, and delete. Navigate nested key prefixes as if they were directories, making it easy to manage objects with path-like keys.
+| Ticket | Lives | Carried in |
+|---|---|---|
+| Download | 60 seconds | the `?t=` query parameter |
+| Preview | 60 seconds | the `?t=` query parameter |
+| Upload | 15 minutes | the `X-Trove-Ticket` header |
 
-## Routes
+Downloads ride in the query string because a plain `<a download>` can't send a header. Uploads use the header, and a PUT that carries `?t=` is refused. The split exists because Forge's dashboard tracing records query strings, so a download ticket can show up in the Traces view for its 60 seconds of life. It's read-only and short, which is why we accepted that.
 
-Dashboard routes are registered under the Forge dashboard base path. By default, Trove's dashboard pages are available at:
+The route always answers with `Content-Disposition: attachment`, so a browser saves what it gets and never renders it. The preview works by fetching the bytes from script and drawing them itself, and the plugin never shows bytes inline from the route. `disable_routes` doesn't turn the content route off.
 
-```
-/dashboard/trove/
-```
+One caveat: the route doesn't work behind the Next.js proxy in `packages/next`. That proxy forwards only GET and POST, caps bodies at 1 MiB and reads every response as text, so uploads never arrive and binary downloads come back mangled. Use the Vite shell, or serve the dashboard from the Go server.
 
-The exact prefix depends on the Forge Dashboard extension's own `base_path` configuration. All Trove dashboard routes are nested under the dashboard's route group, inheriting its authentication and middleware.
+## Moving from the old dashboard
 
-## HTMX Integration
-
-The dashboard uses [HTMX](https://htmx.org) for interactive updates without full page reloads. Actions like creating a bucket, uploading an object, or aborting an upload are performed via HTMX-driven requests that swap content in place. This keeps the interface responsive while maintaining server-rendered HTML as the source of truth.
-
-Table listings support HTMX-powered pagination and inline search, so operators can navigate large datasets without leaving the page.
+The server-rendered pages are gone, along with the `extension/dashboard` package and its `DashboardAware` hook. If your own code imported `github.com/xraph/trove/extension/dashboard`, that import has to go. Some things were dropped on purpose, among them the object and storage counts, quotas, upload sessions and metadata and tag editing, because they read tables that normal operation never writes. [MIGRATION.md](https://github.com/xraph/trove/blob/main/MIGRATION.md) in the repo root lists every old page, column and action with what happened to it and why, and it records the bugs we found along the way.
