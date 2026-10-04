@@ -3,11 +3,9 @@ module github.com/xraph/trove/extension
 go 1.26.0
 
 require (
-	github.com/a-h/templ v0.3.1020
 	github.com/xraph/chronicle v1.6.1
 	github.com/xraph/dispatch v1.6.5
 	github.com/xraph/forge v1.11.2
-	github.com/xraph/forgeui v1.4.1
 	github.com/xraph/go-utils v1.3.0
 	github.com/xraph/grove v1.6.3
 	github.com/xraph/grove/drivers/mongodriver v1.6.3
@@ -23,6 +21,7 @@ require (
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Oudwins/tailwind-merge-go v0.2.3 // indirect
+	github.com/a-h/templ v0.3.1020 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -104,6 +103,7 @@ require (
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xraph/confy v1.0.3 // indirect
+	github.com/xraph/forgeui v1.4.1 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3 // indirect
@@ -117,8 +117,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.45.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
