@@ -3,18 +3,18 @@ module github.com/xraph/trove/extension
 go 1.26.0
 
 require (
-	github.com/xraph/chronicle v1.6.1
-	github.com/xraph/dispatch v1.6.5
+	github.com/xraph/chronicle v1.6.5-0.20261004192324-c8281ed74158
+	github.com/xraph/dispatch v1.6.7
 	github.com/xraph/forge v1.12.0
 	github.com/xraph/go-utils v1.3.0
-	github.com/xraph/grove v1.6.3
-	github.com/xraph/grove/drivers/mongodriver v1.6.3
-	github.com/xraph/grove/drivers/pgdriver v1.6.3
-	github.com/xraph/grove/drivers/sqlitedriver v1.6.3
+	github.com/xraph/grove v1.7.0
+	github.com/xraph/grove/drivers/mongodriver v1.7.0
+	github.com/xraph/grove/drivers/pgdriver v1.7.0
+	github.com/xraph/grove/drivers/sqlitedriver v1.7.0
 	github.com/xraph/trove v1.6.5
-	github.com/xraph/vault v1.6.3
+	github.com/xraph/vault v1.6.4
 	github.com/xraph/vessel v1.0.4
-	github.com/xraph/warden v1.6.3
+	github.com/xraph/warden v1.6.4
 	go.mongodb.org/mongo-driver/v2 v2.8.0
 )
 

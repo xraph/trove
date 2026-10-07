@@ -14,6 +14,7 @@ All notable changes to Trove are documented in this file.
 
 #### Changed
 - **The extension needs forge v1.12.0.** `extension/go.mod` moves up from v1.11.2. It's the first forge release whose dashboard packages import neither templ nor forgeui, which is what lets both leave the module graph.
+- **grove v1.7.0 and newer extension dependencies.** The extension moves to grove v1.7.0 and its three drivers, chronicle at the commit on its main branch that removed its templ dashboard, dispatch v1.6.7, and vault and warden v1.6.4. None of them brings templ back into the graph.
 
 #### Removed
 - **The templ dashboard under `extension/dashboard/`.** If you import `github.com/xraph/trove/extension/dashboard`, that import has to go. The dashboard now lives in the Forge dashboard's React shell as `@forge-go/dashboard-plugin-trove`, and it reads the `trove` contract contributor. `MIGRATION.md` lists what moved, what changed and what was dropped. Neither `github.com/a-h/templ` nor `github.com/xraph/forgeui` is in `extension/go.mod` any more.
