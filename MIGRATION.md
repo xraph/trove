@@ -40,12 +40,13 @@ Tailwind classes of their own, so the shell's stylesheet has to scan the
 package. If your shell declares its sources with `@source`, add
 `@source "<path to>/packages/plugin-trove/src";` next to the others.
 
-Trove's extension needs forge v1.11.2. Before that version the dashboard
-transport never passed a manifest's `invalidates` to the client, and Trove
-declares its cache hints in `extension/contract/manifest.yaml`, so on an older
-forge no upload, copy or delete would refresh the page you're looking at.
-`extension/go.mod` pins v1.11.2 already. If a workspace `replace` holds forge
-back, lift it.
+Trove's extension needs forge v1.12.0, and `extension/go.mod` pins it. It's
+the first forge release whose dashboard packages import neither templ nor
+forgeui, so neither is in the extension's module graph any more. Anything
+older than v1.11.2 also never passed a manifest's `invalidates` to the client,
+and Trove declares its cache hints in `extension/contract/manifest.yaml`, so on
+an older forge no upload, copy or delete would refresh the page you're looking
+at. If a workspace `replace` holds forge back, lift it.
 
 There are three new config keys:
 
@@ -683,17 +684,6 @@ component is covered on the page that rendered it: `BucketTable` on Buckets,
 
 These are known gaps. None of them is a regression from the templ pages.
 
-- templ is still in the extension's module graph, as an indirect dependency.
-  forge's `dashboard/contract` imports `dashboard/auth`, which imports templ,
-  in every released forge tag. forge main has dropped it and isn't released
-  yet. Bumping forge once a release without it exists finishes the job.
-- forgeui is no longer a direct dependency of the extension, but
-  `extension/go.mod` still lists it as `// indirect`. The reason is
-  `extension/dashboard_aware_test.go`, which checks the extension against
-  forge's `ContractContributorAware`. That interface lives in forge's
-  `extensions/dashboard` package, and in forge v1.11.2 the package still
-  imports forgeui. Production code never imports it. Once forge's dashboard
-  root drops forgeui, the indirect line can go.
 - forge's dashboard tracing records the raw query string, so a download or
   preview ticket in `?t=` is readable in the Traces view for its 60 seconds.
   forge should redact the `t` parameter.

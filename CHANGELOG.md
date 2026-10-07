@@ -12,8 +12,11 @@ All notable changes to Trove are documented in this file.
 - **A `trove` contract contributor** with 20 intents, registered through forge's `ContractContributorAware`. The React plugin reads it.
 - **`Trove.Backends()` and `Trove.DriverFor(bucket, key)`** in core: the names of the backends registered with `WithBackend`, and the driver that serves a given bucket and key after routing.
 
+#### Changed
+- **The extension needs forge v1.12.0.** `extension/go.mod` moves up from v1.11.2. It's the first forge release whose dashboard packages import neither templ nor forgeui, which is what lets both leave the module graph.
+
 #### Removed
-- **The templ dashboard under `extension/dashboard/`.** If you import `github.com/xraph/trove/extension/dashboard`, that import has to go. The dashboard now lives in the Forge dashboard's React shell as `@forge-go/dashboard-plugin-trove`, and it reads the `trove` contract contributor. `MIGRATION.md` lists what moved, what changed and what was dropped. `github.com/xraph/forgeui` is no longer a direct dependency of `extension`. It stays in `go.mod` as an indirect one only because a test checks the extension against forge's `ContractContributorAware` interface, and that package still imports forgeui in forge v1.11.2.
+- **The templ dashboard under `extension/dashboard/`.** If you import `github.com/xraph/trove/extension/dashboard`, that import has to go. The dashboard now lives in the Forge dashboard's React shell as `@forge-go/dashboard-plugin-trove`, and it reads the `trove` contract contributor. `MIGRATION.md` lists what moved, what changed and what was dropped. Neither `github.com/a-h/templ` nor `github.com/xraph/forgeui` is in `extension/go.mod` any more.
 - **`Extension.DashboardContributor()`.** The extension no longer satisfies forge's `DashboardAware`, so code that asserts it, or calls the method, has to go. Forge looks for the contract contributor instead.
 
 ---

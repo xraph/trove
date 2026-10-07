@@ -7,7 +7,7 @@ Trove's dashboard is a React plugin, `@forge-go/dashboard-plugin-trove`, that ru
 
 ## Turning it on
 
-There's nothing to switch on in Go. The Trove extension registers its contract contributor with Forge's dashboard when it starts, and the shell finds it there. You do need Forge v1.11.2 or newer, because older versions never passed Trove's cache hints to the client, and an upload or delete wouldn't refresh the page you're looking at.
+There's nothing to switch on in Go. The Trove extension registers its contract contributor with Forge's dashboard when it starts, and the shell finds it there. You do need Forge v1.12.0 or newer, which the extension's `go.mod` pins. Versions before v1.11.2 never passed Trove's cache hints to the client, so an upload or delete wouldn't refresh the page you're looking at.
 
 On the shell side, add the plugin to your plugin list:
 
