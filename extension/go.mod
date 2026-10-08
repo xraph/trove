@@ -5,17 +5,17 @@ go 1.26.0
 require (
 	github.com/xraph/chronicle v1.6.5-0.20261004192324-c8281ed74158
 	github.com/xraph/dispatch v1.6.7
-	github.com/xraph/forge v1.12.0
+	github.com/xraph/forge v1.12.3
 	github.com/xraph/go-utils v1.3.0
-	github.com/xraph/grove v1.7.0
-	github.com/xraph/grove/drivers/mongodriver v1.7.0
-	github.com/xraph/grove/drivers/pgdriver v1.7.0
-	github.com/xraph/grove/drivers/sqlitedriver v1.7.0
-	github.com/xraph/trove v1.6.5
-	github.com/xraph/vault v1.6.4
+	github.com/xraph/grove v1.7.1
+	github.com/xraph/grove/drivers/mongodriver v1.7.1
+	github.com/xraph/grove/drivers/pgdriver v1.7.1
+	github.com/xraph/grove/drivers/sqlitedriver v1.7.1
+	github.com/xraph/trove v1.7.0
+	github.com/xraph/vault v1.7.0
 	github.com/xraph/vessel v1.0.4
-	github.com/xraph/warden v1.6.4
-	go.mongodb.org/mongo-driver/v2 v2.8.0
+	github.com/xraph/warden v1.7.0
+	go.mongodb.org/mongo-driver/v2 v2.9.1
 )
 
 require (
@@ -71,7 +71,7 @@ require (
 	github.com/hashicorp/serf v0.10.4 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.10.0 // indirect
+	github.com/jackc/pgx/v5 v5.11.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
@@ -120,7 +120,7 @@ require (
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.41.0 // indirect

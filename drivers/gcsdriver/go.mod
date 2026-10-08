@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	cloud.google.com/go/storage v1.69.0
 	github.com/stretchr/testify v1.12.1
-	github.com/xraph/trove v1.6.5
+	github.com/xraph/trove v1.7.0
 	google.golang.org/api v0.288.0
 )
 
