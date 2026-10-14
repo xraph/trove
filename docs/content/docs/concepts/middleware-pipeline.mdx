@@ -3,7 +3,7 @@ title: "Middleware Pipeline"
 description: "Direction-aware, scope-based middleware pipeline with composable read/write transformations."
 ---
 
-Trove's middleware pipeline intercepts the data stream -- not the HTTP request -- so transformations like encryption, compression, and scanning work identically whether you access storage via REST, WebSocket, or the Go API.
+Trove's middleware pipeline intercepts the data stream, not an HTTP request, so encryption, compression and scanning behave the same however your code reaches `Put` and `Get`.
 
 ## Direction Model
 
@@ -55,8 +55,10 @@ Scopes determine when a middleware is active. They are evaluated at runtime agai
 | `ScopeGlobal{}` | Matches every operation (default) | Always active |
 | `ScopeBucket{Buckets}` | Matches specific bucket names | `&ScopeBucket{Buckets: []string{"uploads"}}` |
 | `ScopeKeyPattern{Patterns}` | Matches key glob patterns | `&ScopeKeyPattern{Patterns: []string{"*.pdf"}}` |
-| `ScopeContentType{Types}` | Matches by content type prefix | `&ScopeContentType{Types: []string{"image/*"}}` |
+| `ScopeContentType{Types}` | Meant to match by content type (see the note below) | `&ScopeContentType{Types: []string{"image/*"}}` |
 | `ScopeFunc{Fn, Desc}` | Arbitrary predicate function | Custom runtime logic |
+
+> `ScopeContentType` doesn't look at content types yet. It only considers entries ending in `/*`, and compares the key's file extension with the part before the slash, so `image/*` matches a key like `cat.imagefile` and never `cat.jpg`. Until that's fixed, scope by key pattern (`ForKeys("*.jpg", "*.png")`) instead.
 
 ### Boolean Combinators
 
@@ -148,8 +150,9 @@ pipeline := resolver.ResolveWrite(ctx, "uploads", "report.pdf")
 | `compress` | `middleware/compress` | ReadWrite | Zstd compression with min-size threshold and skip lists |
 | `dedup` | `middleware/dedup` | Write | Content-hash deduplication with pluggable store |
 | `scan` | `middleware/scan` | Write | Threat scanning with pluggable `Provider` (ClamAV, etc.) |
-| `watermark` | `middleware/watermark` | Read | Invisible metadata watermarking for PNG and JPEG |
-| `cache` | `middleware` | Internal | LRU scope resolution cache (1024 entries) |
+| `watermark` | `middleware/watermark` | Read | Text mark in file metadata for PNG, JPEG and PDF |
+
+The resolver's LRU cache of resolved pipelines (1024 entries) is internal to the `middleware` package. It isn't a middleware you register.
 
 ## Writing Custom Middleware
 
@@ -187,6 +190,6 @@ Register it:
 
 ```go
 t, _ := trove.Open(drv,
-    trove.WithMiddlewareAt(-100, &logging.Logger{}), // Run first (lowest priority)
+    trove.WithMiddlewareAt(-100, &logging.Logger{}), // runs first (lowest priority value)
 )
 ```

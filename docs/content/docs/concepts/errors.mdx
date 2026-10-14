@@ -21,7 +21,7 @@ caller chooses how precisely it wants to match:
 
 ```go
 errors.Is(err, trove.ErrObjectNotFound) // this exact object is gone
-errors.Is(err, trove.ErrNotFound)       // something is gone -- also true
+errors.Is(err, trove.ErrNotFound)       // something is gone: also true
 ```
 
 Match `ErrNotFound` when any missing resource is handled the same way, and the
@@ -36,7 +36,7 @@ Errors raised when the backend refuses the operation:
 | `ErrPermissionDenied` | Credentials are not authorized for the operation |
 | `ErrQuotaExceeded` | Storage quota or rate limit exceeded |
 
-`ErrPermissionDenied` will not clear on its own -- it needs the credentials or
+`ErrPermissionDenied` will not clear on its own: it needs the credentials or
 the access policy to change. `ErrQuotaExceeded` may clear with time, so it is
 usually worth retrying.
 
@@ -52,7 +52,7 @@ Errors related to invalid input:
 | `ErrInvalidDSN` | DSN string cannot be parsed |
 
 `ErrInvalidPath` comes from drivers that map keys onto a hierarchical
-namespace -- `local` and `sftp` -- when a bucket or key is empty, contains a
+namespace: `local` and `sftp`: when a bucket or key is empty, contains a
 NUL byte, is rooted, or resolves outside the container it was addressed to.
 Their containment guards refuse it before it reaches the filesystem.
 
@@ -60,7 +60,7 @@ It is deliberately **not** part of the not-found family:
 
 ```go
 errors.Is(err, trove.ErrInvalidPath) // true
-errors.Is(err, trove.ErrNotFound)    // false -- nothing was looked up
+errors.Is(err, trove.ErrNotFound)    // false: nothing was looked up
 ```
 
 The key was never addressable, so no lookup happened. An HTTP surface must
@@ -77,7 +77,7 @@ Errors related to driver lifecycle:
 
 | Error | Description |
 |-------|-------------|
-| `ErrDriverClosed` | Operation attempted on a closed driver |
+| `ErrDriverClosed` | Declared for a closed driver. No built-in driver returns it yet |
 | `ErrNilDriver` | `Open` called with a nil driver |
 | `ErrBackendNotFound` | Named backend does not exist in the router |
 
@@ -87,7 +87,7 @@ Errors related to data integrity and security:
 
 | Error | Description |
 |-------|-------------|
-| `ErrChecksumMismatch` | Checksum verification failed -- data may be corrupted |
+| `ErrChecksumMismatch` | Declared for checksum verification, which isn't implemented yet, so nothing returns it |
 | `ErrContentBlocked` | Content rejected by scanning middleware (threat detected) |
 
 ## Stream Errors
@@ -117,21 +117,15 @@ reader, err := t.Get(ctx, "data", "report.csv")
 if err != nil {
     switch {
     case errors.Is(err, trove.ErrObjectNotFound):
-        // Object does not exist -- return 404
+        // Object does not exist: return 404
         http.Error(w, "Not found", http.StatusNotFound)
 
     case errors.Is(err, trove.ErrBucketNotFound):
-        // Bucket does not exist -- return 404
+        // Bucket does not exist: return 404
         http.Error(w, "Bucket not found", http.StatusNotFound)
 
-    case errors.Is(err, trove.ErrChecksumMismatch):
-        // Data corruption detected
-        log.Error("integrity failure", "err", err)
-        http.Error(w, "Data integrity error", http.StatusInternalServerError)
-
-    case errors.Is(err, trove.ErrDriverClosed):
-        // Driver shut down -- service unavailable
-        http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+    case errors.Is(err, trove.ErrPermissionDenied):
+        http.Error(w, "Forbidden", http.StatusForbidden)
 
     default:
         http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -142,29 +136,17 @@ if err != nil {
 
 ## HTTP Status Code Mapping
 
-When Trove is used as an HTTP API, sentinel errors map to standard HTTP status codes:
+The REST handler in `extension/handler` maps errors to statuses like this. Anything it doesn't recognize answers 500 with the message `internal error`, and the real error goes to the log:
 
 | Error | HTTP Status | Code |
 |-------|-------------|:----:|
-| `ErrNotFound` | Not Found | 404 |
-| `ErrBucketNotFound` | Not Found | 404 |
-| `ErrObjectNotFound` | Not Found | 404 |
+| `ErrInvalidPath`, `ErrKeyEmpty`, `ErrBucketEmpty` | Bad Request | 400 |
+| `ErrNotFound` (and with it `ErrObjectNotFound`, `ErrBucketNotFound`) | Not Found | 404 |
 | `ErrBucketExists` | Conflict | 409 |
-| `ErrKeyEmpty` | Bad Request | 400 |
-| `ErrBucketEmpty` | Bad Request | 400 |
-| `ErrInvalidPath` | Bad Request | 400 |
-| `ErrInvalidDSN` | Bad Request | 400 |
-| `ErrDriverClosed` | Service Unavailable | 503 |
-| `ErrNilDriver` | Internal Server Error | 500 |
-| `ErrBackendNotFound` | Not Found | 404 |
-| `ErrChecksumMismatch` | Conflict | 409 |
-| `ErrQuotaExceeded` | Insufficient Storage | 507 |
 | `ErrPermissionDenied` | Forbidden | 403 |
-| `ErrContentBlocked` | Unprocessable Entity | 422 |
-| `ErrStreamClosed` | Gone | 410 |
-| `ErrUploadExpired` | Gone | 410 |
-| `ErrPoolClosed` | Service Unavailable | 503 |
-| `ErrMaxStreamsReached` | Too Many Requests | 429 |
+| `ErrQuotaExceeded` | Insufficient Storage | 507 |
+
+If you build your own HTTP layer, the same table is a reasonable start. `ErrContentBlocked` fits 422, and `ErrMaxStreamsReached` fits 429.
 
 ## Creating Application Errors
 
@@ -203,7 +185,7 @@ reader, err := t.Get(ctx, "artifacts", inputKey)
 if err != nil {
     if trove.Permanent(err) {
         // The input is gone, or we are not allowed to read it. Retrying
-        // cannot change that -- fail now and dead-letter the job.
+        // can't change that, so fail now and dead-letter the job.
         return job.Fail(err)
     }
     // Transient: backend trouble, throttling, a dropped connection.
@@ -240,7 +222,7 @@ retryable reading wins.
 
 Drivers **must** wrap these sentinels rather than returning a bare descriptive
 error, and must use the backend's typed error or status code to decide which
-one applies -- never a substring match on the message. The descriptive message
+one applies: never a substring match on the message. The descriptive message
 is preserved; the sentinel is added with `%w`:
 
 ```go
@@ -279,11 +261,11 @@ hostnames, and bucket layout. So when you wrap a sentinel, the message must
 name only what the caller supplied:
 
 ```go
-// Good -- names the caller's own segment.
+// Good: names the caller's own segment.
 return "", fmt.Errorf("mydriver: path segment %q escapes its parent directory: %w",
     segment, driver.ErrInvalidPath)
 
-// Bad -- publishes where the storage root lives.
+// Bad: publishes where the storage root lives.
 return "", fmt.Errorf("mydriver: %q escapes %s: %w",
     segment, resolvedRootDir, driver.ErrInvalidPath)
 ```

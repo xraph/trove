@@ -1,198 +1,101 @@
 ---
 title: "Ecosystem Integration"
-description: "Auto-discovery hooks for Chronicle audit, Vault encryption, Dispatch jobs, Warden access control, and Prometheus metrics."
+description: "Hooks for Chronicle audit, Vault encryption, Dispatch jobs, Warden access control, and metrics."
 ---
 
-Trove integrates with the Forge ecosystem through auto-discovery hooks. Each hook checks for a specific service in the DI container and wires itself in when available. If a service isn't present, the hook is silently skipped.
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `github.com/xraph/trove/extension/hooks` package has helpers for the rest of the Forge ecosystem. Each constructor looks its service up in the DI container and returns `nil` when it isn't there, and every method is safe to call on a `nil` hook.
+
+<Callout type="warn">
+The Trove extension doesn't create or call any of these hooks. Nothing is discovered or wired automatically: you build each hook after the app has registered and call it from your own code.
+</Callout>
 
 ## Chronicle (Audit)
 
-When `chronicle.Emitter` is in DI, Trove emits audit events for storage operations.
-
-### Events
-
-| Event | Trigger |
-|-------|---------|
-| `trove.object.created` | Object uploaded or copied |
-| `trove.object.read` | Object downloaded |
-| `trove.object.deleted` | Object deleted |
-| `trove.object.copied` | Object copied |
-| `trove.bucket.created` | Bucket created |
-| `trove.bucket.deleted` | Bucket deleted |
-| `trove.upload.initiated` | Multipart upload started |
-| `trove.upload.completed` | Multipart upload finalized |
-| `trove.upload.aborted` | Multipart upload cancelled |
-| `trove.cas.stored` | Content stored in CAS |
-| `trove.cas.gc` | CAS garbage collection ran |
-
-### Event Metadata
-
-Each event includes contextual metadata:
+`hooks.NewChronicleHook(app, logger)` injects a `chronicle.Emitter`. You call its `Record*` methods where your code does the matching operation:
 
 ```go
-// Object events include:
-{
-    "bucket": "uploads",
-    "key":    "photos/cat.jpg",
-    "size":   204800,
-}
+audit := hooks.NewChronicleHook(app, app.Logger())
 
-// CAS events include:
-{
-    "size":         1024,
-    "deduplicated": true,
-}
-
-// GC events include:
-{
-    "scanned":     1500,
-    "deleted":     42,
-    "freed_bytes": 8388608,
+info, err := t.Put(ctx, "uploads", key, body)
+if err == nil {
+    audit.RecordObjectCreated(ctx, "uploads", key, info.Size)
 }
 ```
 
-### Setup
+| Method | Event |
+|--------|-------|
+| `RecordObjectCreated(ctx, bucket, key, size)` | `trove.object.created` |
+| `RecordObjectRead(ctx, bucket, key)` | `trove.object.read` |
+| `RecordObjectDeleted(ctx, bucket, key)` | `trove.object.deleted` |
+| `RecordBucketCreated(ctx, name)` | `trove.bucket.created` |
+| `RecordBucketDeleted(ctx, name)` | `trove.bucket.deleted` |
+| `RecordCASStored(ctx, hash, size, deduplicated)` | `trove.cas.stored` |
+| `RecordCASGC(ctx, scanned, deleted, freedBytes)` | `trove.cas.gc` |
 
-Chronicle audit is automatic when the Chronicle extension is loaded:
+The package also declares `trove.object.copied` and the `trove.upload.*` event names as constants, but no method emits them yet.
+
+### Event Metadata
 
 ```go
-app := forge.New(
-    forge.WithExtensions(
-        chronicleext.New(),  // Provides chronicle.Emitter to DI
-        troveext.New(),      // Auto-discovers and wires audit hook
-    ),
-)
+// Object events:
+{"bucket": "uploads", "key": "photos/cat.jpg", "size": 204800}
+
+// CAS store events:
+{"size": 1024, "deduplicated": true}
+
+// GC events:
+{"scanned": 1500, "deleted": 42, "freed_bytes": 8388608}
 ```
 
 ## Vault (Encryption Keys)
 
-When `store.Store` from the Vault package is in DI, Trove auto-configures encryption middleware with Vault-managed keys.
-
-### How It Works
-
-1. The hook injects the Vault `store.Store` from DI
-2. Creates a `KeyProvider` that retrieves the encryption key from Vault
-3. The key is fetched from the secret path `trove/data-encryption-key`
-4. The key is passed to Trove's AES-256-GCM encryption middleware
-
-### Key Storage
-
-Store the encryption key in Vault before starting Trove:
+`hooks.NewVaultHook(app, logger)` injects Vault's `store.Store`. Its `KeyProvider(appID)` returns an `encrypt.KeyProvider` that reads the secret at `trove/data-encryption-key` for that app. Plug it into the encrypt middleware yourself:
 
 ```go
-// Using vault's secret service:
-secretSvc.Set(ctx, "trove/data-encryption-key", encryptionKey, appID)
+vh := hooks.NewVaultHook(app, app.Logger())
+
+t.UseMiddleware(middleware.Registration{
+    Middleware: encrypt.New(encrypt.WithKeyProvider(vh.KeyProvider("my-app"))),
+})
 ```
 
-The key must be raw bytes suitable for AES-256-GCM (32 bytes).
-
-### Setup
-
-```go
-app := forge.New(
-    forge.WithExtensions(
-        vaultext.New(),  // Provides vault store to DI
-        troveext.New(),  // Auto-discovers and configures encryption
-    ),
-)
-```
+The secret must hold the raw 32-byte AES-256 key. The provider returns the secret's stored value, which is the plaintext key only when Vault's own encryption is off.
 
 ## Dispatch (Background Jobs)
 
-When `*engine.Engine` from Dispatch is in DI, Trove registers background jobs.
+`hooks.NewDispatchHook(app, t, logger)` injects Dispatch's `*engine.Engine`. Call `RegisterJobs(ctx)` to register two jobs:
 
-### Registered Jobs
+| Job Name | What it does today |
+|----------|--------------------|
+| `trove.cleanup-expired-uploads` | Logs a line and returns. Upload sessions aren't stored yet, so there's nothing to clean |
+| `trove.cas-gc` | Calls `t.CAS().GC(ctx)` and logs the result, or does nothing when CAS is off |
 
-| Job Name | Description |
-|----------|-------------|
-| `trove.cleanup-expired-uploads` | Deletes expired multipart upload sessions |
-| `trove.cas-gc` | Removes unreferenced CAS objects (GC) |
-
-### CAS Garbage Collection
-
-The `trove.cas-gc` job calls `CAS().GC()` and logs results:
-
-```
-CAS garbage collection completed  scanned=1500  deleted=42  freed_bytes=8388608  errors=0
-```
-
-### Setup
-
-```go
-app := forge.New(
-    forge.WithExtensions(
-        dispatchext.New(), // Provides *engine.Engine to DI
-        troveext.New(),    // Registers background jobs
-    ),
-)
-```
+Registering a job doesn't schedule it. Enqueue it or give it a Dispatch cron yourself.
 
 ## Warden (Access Control)
 
-When `*warden.Engine` is in DI, Trove applies authorization middleware to all routes.
-
-### Resource Types
-
-| Resource | Applied To |
-|----------|-----------|
-| `trove:bucket` | Bucket CRUD operations |
-| `trove:object` | Object CRUD operations |
-| `trove:upload` | Multipart upload operations |
-| `trove:stream` | Streaming operations |
-| `trove:cas` | CAS operations |
-
-### Action Mapping
-
-| HTTP Method | Action |
-|-------------|--------|
-| `GET`, `HEAD` | `read` |
-| `PUT`, `POST` | `create` |
-| `DELETE` | `delete` |
-
-### How It Works
-
-1. For each request, the middleware extracts the resource type from the URL path
-2. Maps the HTTP method to an action
-3. Extracts the subject from the `X-Subject-ID` header (defaults to `"anonymous"`)
-4. Calls `warden.Engine.Check()` with the subject, action, and resource
-5. Returns `403 Forbidden` if denied, or passes through to the handler
-
-### Setup
+`hooks.NewWardenHook(app, logger)` injects a `*warden.Engine`. `Middleware()` returns a `func(http.Handler) http.Handler` that you wrap around the REST handler from `extension/handler`:
 
 ```go
-app := forge.New(
-    forge.WithExtensions(
-        wardenext.New(),  // Provides *warden.Engine to DI
-        troveext.New(),   // Applies authorization middleware
-    ),
-)
+wh := hooks.NewWardenHook(app, app.Logger())
+h := handler.New(t, metaStore, app.Logger())
+
+mux.Handle("/trove/", http.StripPrefix("/trove", wh.Middleware()(h)))
 ```
 
-## Prometheus Metrics
+For each request it:
 
-The metrics hook registers Prometheus metrics for monitoring Trove operations.
+1. Picks a resource type from the path: `trove:cas`, `trove:upload`, `trove:object` or `trove:bucket` (the type `trove:stream` is declared but never chosen).
+2. Maps the method to an action: `GET` and `HEAD` are `read`, `PUT` and `POST` are `create`, `DELETE` is `delete`.
+3. Takes the subject from the `X-Subject-ID` header, or `anonymous`.
+4. Calls `Check` on the Warden engine and answers 403 when it's denied.
 
-### Metric Names
+<Callout type="warn">
+The subject comes from a request header. Unless something upstream sets `X-Subject-ID` from an authenticated identity and strips any value the client sent, a caller can claim to be anyone.
+</Callout>
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `trove_objects_total` | Counter | Total objects stored |
-| `trove_objects_size_bytes` | Counter | Total bytes stored |
-| `trove_uploads_active` | Gauge | Active multipart uploads |
-| `trove_uploads_completed_total` | Counter | Completed uploads |
-| `trove_uploads_failed_total` | Counter | Failed uploads |
-| `trove_stream_bytes_sent_total` | Counter | Bytes sent via streams |
-| `trove_stream_bytes_recv_total` | Counter | Bytes received via streams |
-| `trove_middleware_duration_seconds` | Histogram | Middleware processing time |
-| `trove_cas_dedup_hits_total` | Counter | CAS deduplication hits |
-| `trove_cas_dedup_bytes_saved` | Counter | Bytes saved by dedup |
-| `trove_driver_latency_seconds` | Histogram | Storage driver latency |
-| `trove_driver_errors_total` | Counter | Storage driver errors |
-| `trove_quota_usage_bytes` | Gauge | Current quota usage |
-| `trove_quota_limit_bytes` | Gauge | Configured quota limit |
+## Metrics
 
-### Labels
-
-- `bucket` — bucket name
-- `driver` — storage driver name
-- `operation` — driver operation (get, put, delete, list, head, copy)
+`hooks.NewMetricsHook(app, logger)` and its `Record*` methods exist, and the package names the metrics it plans to report (`trove_objects_total`, `trove_driver_latency_seconds`, `trove_cas_dedup_hits_total` and so on). They don't record anything yet: `RegisterMetrics` only logs a line, and every `Record*` method is an empty stub. For storage metrics today, wrap the driver or add your own middleware.

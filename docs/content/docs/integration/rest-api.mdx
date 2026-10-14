@@ -3,7 +3,32 @@ title: "Transport & REST API"
 description: "HTTP REST endpoints for object storage, uploads, buckets, CAS, and admin operations."
 ---
 
-The Trove extension exposes a full REST API for object storage operations. All endpoints are registered under the configured base path (default: `/trove/v1`).
+import { Callout } from "fumadocs-ui/components/callout";
+
+<Callout type="warn">
+The Forge extension doesn't mount a REST API yet. Its route registration is an empty placeholder, so `base_path` and `disable_routes` have no effect. The handlers below live in `extension/handler` as a plain `http.Handler`, and you mount them yourself.
+</Callout>
+
+## Mounting the handler
+
+`handler.New` takes the `*trove.Trove`, an optional metadata `store.Store` (pass `nil` to skip metadata) and a go-utils logger:
+
+```go
+import (
+    "net/http"
+
+    "github.com/xraph/trove/extension/handler"
+)
+
+h := handler.New(t, metaStore, logger)
+
+mux := http.NewServeMux()
+mux.Handle("/trove/", http.StripPrefix("/trove", h))
+```
+
+Inside a Forge app, `ext.Trove()` and `ext.Store()` give you the first two arguments. The handler has no authentication or authorization of its own, so put your own middleware in front of it. `extension/hooks.NewWardenHook(app, logger).Middleware()` is one option.
+
+All paths below are relative to wherever you mount the handler.
 
 ## Endpoints
 
@@ -11,44 +36,50 @@ The Trove extension exposes a full REST API for object storage operations. All e
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/buckets` | Create a bucket |
+| `POST` | `/buckets` | Create a bucket. Body: `{"name": "uploads"}` |
 | `GET` | `/buckets` | List all buckets |
-| `GET` | `/buckets/:bucket` | Get bucket info |
-| `DELETE` | `/buckets/:bucket` | Delete a bucket |
+| `GET` | `/buckets/{bucket}` | Get bucket info |
+| `DELETE` | `/buckets/{bucket}` | Delete a bucket |
 
 ### Objects
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/buckets/:bucket/objects/*key` | Upload an object |
-| `GET` | `/buckets/:bucket/objects/*key` | Download an object |
-| `DELETE` | `/buckets/:bucket/objects/*key` | Delete an object |
-| `HEAD` | `/buckets/:bucket/objects/*key` | Get object metadata |
-| `GET` | `/buckets/:bucket/objects` | List objects in a bucket |
+| `PUT` | `/buckets/{bucket}/objects/{key...}` | Upload an object (the request body) |
+| `GET` | `/buckets/{bucket}/objects/{key...}` | Download an object |
+| `DELETE` | `/buckets/{bucket}/objects/{key...}` | Delete an object |
+| `HEAD` | `/buckets/{bucket}/objects/{key...}` | Get object metadata as headers |
+| `GET` | `/buckets/{bucket}/list` | List objects, with optional `prefix` and `delimiter` query parameters |
 
 ### Multipart Uploads
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/buckets/:bucket/uploads` | Initiate multipart upload |
-| `PUT` | `/buckets/:bucket/uploads/:id/parts/:partNum` | Upload a part |
-| `POST` | `/buckets/:bucket/uploads/:id/complete` | Complete upload |
-| `DELETE` | `/buckets/:bucket/uploads/:id` | Abort upload |
-| `GET` | `/buckets/:bucket/uploads/:id` | Get upload status |
+| `POST` | `/uploads` | Initiate an upload |
+| `PUT` | `/uploads/{id}/chunks/{number}` | Upload a chunk |
+| `POST` | `/uploads/{id}/complete` | Complete an upload |
+| `POST` | `/uploads/{id}/abort` | Abort an upload |
+| `GET` | `/uploads/{id}` | Get upload status |
+
+<Callout type="warn">
+The upload routes are placeholders. They answer with canned JSON (`"status": "initiated"`, `"accepted"` and so on) and store nothing. Use `PUT` on the objects route, or the S3, GCS and Azure drivers' `MultipartDriver` from Go, until upload sessions are implemented.
+</Callout>
 
 ### Content-Addressable Storage
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/cas` | Store content by hash |
-| `GET` | `/cas/:hash` | Retrieve content by hash |
-| `HEAD` | `/cas/:hash` | Check if hash exists |
+| `POST` | `/cas/store` | Store the request body by its hash |
+| `GET` | `/cas/{hash}` | Retrieve content by hash |
+| `HEAD` | `/cas/{hash}` | Check whether a hash exists |
+
+The CAS routes answer 404 with `"CAS is not enabled"` unless the Trove instance was opened with `trove.WithCAS(...)` (or `enable_cas: true` in the extension).
 
 ### Admin
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/admin/stats` | Storage statistics |
+| `GET` | `/admin/stats` | Driver name, active streams and whether CAS is on |
 
 ## Request / Response Examples
 
@@ -56,104 +87,86 @@ The Trove extension exposes a full REST API for object storage operations. All e
 
 ```bash
 curl -X PUT \
-  http://localhost:8080/trove/v1/buckets/uploads/objects/photos/cat.jpg \
-  -H "Content-Type: image/jpeg" \
+  http://localhost:8080/trove/buckets/uploads/objects/photos/cat.jpg \
   --data-binary @cat.jpg
 ```
 
+The response is the stored `driver.ObjectInfo`:
+
 ```json
 {
-  "bucket": "uploads",
   "key": "photos/cat.jpg",
   "size": 204800,
-  "content_type": "image/jpeg",
+  "content_type": "",
   "etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
   "last_modified": "2025-01-15T10:30:00Z"
 }
 ```
 
+The handler doesn't pass the request's `Content-Type` on to `Put`, so the stored content type is whatever the driver records by default.
+
 ### Download an Object
 
 ```bash
-curl http://localhost:8080/trove/v1/buckets/uploads/objects/photos/cat.jpg \
+curl http://localhost:8080/trove/buckets/uploads/objects/photos/cat.jpg \
   -o cat.jpg
 ```
 
-The response streams the object body with appropriate `Content-Type`, `Content-Length`, and `ETag` headers.
+The response streams the object body with `Content-Type`, `Content-Length` and `ETag` headers.
 
 ### List Objects
 
 ```bash
-curl "http://localhost:8080/trove/v1/buckets/uploads/objects?prefix=photos/&limit=100"
+curl "http://localhost:8080/trove/buckets/uploads/list?prefix=photos/"
 ```
 
+The response is a JSON array of `driver.ObjectInfo`:
+
 ```json
-{
-  "objects": [
-    {
-      "key": "photos/cat.jpg",
-      "size": 204800,
-      "last_modified": "2025-01-15T10:30:00Z"
-    }
-  ],
-  "truncated": false
-}
+[
+  {
+    "key": "photos/cat.jpg",
+    "size": 204800,
+    "content_type": "image/jpeg",
+    "etag": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+    "last_modified": "2025-01-15T10:30:00Z"
+  }
+]
 ```
 
 ### CAS Store
 
 ```bash
-curl -X PUT \
-  http://localhost:8080/trove/v1/cas \
-  -H "Content-Type: application/octet-stream" \
+curl -X POST \
+  http://localhost:8080/trove/cas/store \
   --data-binary @data.bin
 ```
 
 ```json
 {
   "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "size": 1024,
-  "deduplicated": false
+  "info": {
+    "key": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 1024
+  }
 }
 ```
 
-## Headers
-
-### Request Headers
-
-| Header | Description |
-|--------|-------------|
-| `Content-Type` | MIME type for uploads |
-| `Content-Length` | Object size (optional, enables size validation) |
-| `X-Trove-Checksum` | Expected checksum for integrity verification |
-| `X-Subject-ID` | Subject identifier for authorization (set by auth middleware) |
-
-### Response Headers
-
-| Header | Description |
-|--------|-------------|
-| `ETag` | Object entity tag |
-| `Content-Type` | Object MIME type |
-| `Content-Length` | Object size in bytes |
-| `Last-Modified` | Object modification timestamp |
-| `X-Trove-Checksum` | Server-computed checksum |
-
 ## Error Responses
 
-All errors follow a consistent JSON format:
+Errors come back as JSON with an `error` field:
 
 ```json
 {
-  "error": "object not found",
-  "code": 404
+  "error": "trove: object not found"
 }
 ```
 
 | Code | Meaning |
 |------|---------|
-| `400` | Bad request (missing bucket, invalid key) |
-| `403` | Forbidden (Warden denied access) |
-| `404` | Object, bucket, or upload not found |
-| `409` | Conflict (bucket already exists) |
-| `413` | Payload too large (quota exceeded) |
-| `500` | Internal server error |
+| `400` | Bad request: missing bucket or key, invalid path, bad JSON body |
+| `403` | The driver reported permission denied |
+| `404` | Object, bucket or CAS hash not found, or CAS not enabled |
+| `409` | Bucket already exists |
+| `507` | The driver reported a quota exceeded |
+| `500` | Anything else. The message is `"internal error"` and the real error goes to the log |

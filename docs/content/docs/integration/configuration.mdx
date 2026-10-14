@@ -3,7 +3,7 @@ title: "Configuration"
 description: "Configure Trove via YAML files, programmatic options, or environment variables."
 ---
 
-Trove supports three configuration sources that merge in a defined order: YAML files, programmatic options, and built-in defaults. This gives you full flexibility to configure storage in any environment.
+The Trove Forge extension merges three configuration sources: YAML files, programmatic options and built-in defaults. This page covers the extension. Plain `trove.Open` takes only Go options.
 
 ## YAML Configuration
 
@@ -13,21 +13,19 @@ Add a `trove` key under `extensions` in your Forge config file:
 # config.yaml
 extensions:
   trove:
-    driver_dsn: "file:///data/storage"       # Storage driver DSN
-    grove_database: "default"                # Named Grove DB from DI for metadata
-    base_path: "/trove/v1"                   # HTTP route prefix
-    disable_routes: false                    # Skip HTTP route registration
-    disable_migrate: false                   # Skip auto-migration
+    storage_driver: "file:///data/storage"   # Storage driver DSN
+    grove_database: "metadata"               # Named Grove DB from DI for metadata
+    disable_migrate: false                   # Skip the metadata migrations
     default_bucket: "default"                # Default bucket name
-    cas_algorithm: "sha256"                  # CAS hash: sha256, blake3, xxhash
+    enable_cas: false                        # CAS with SHA-256
+    enable_compression: false                # Zstandard compression middleware
 ```
 
-The extension also supports a top-level `trove` key for backward compatibility:
+The extension also reads a top-level `trove` key:
 
 ```yaml
-# Legacy format (still supported)
 trove:
-  driver_dsn: "s3://my-bucket?region=us-east-1"
+  storage_driver: "s3://us-east-1/my-bucket"
 ```
 
 The namespaced `extensions.trove` key is checked first. If not found, the extension falls back to the top-level `trove` key.
@@ -39,7 +37,6 @@ Trove supports multiple named file stores, each with its own storage driver, met
 ```yaml
 extensions:
   trove:
-    base_path: "/trove/v1"
     stores:
       - name: primary
         storage_driver: "s3://us-east-1/my-bucket"
@@ -64,9 +61,9 @@ extensions:
 | `storage_driver` | string | DSN for the storage backend (required) |
 | `grove_database` | string | Named Grove DB for metadata |
 | `default_bucket` | string | Default bucket name |
-| `enable_cas` | bool | Enable content-addressable storage |
-| `enable_encryption` | bool | Auto-configure encryption middleware |
-| `enable_compression` | bool | Auto-configure compression middleware |
+| `enable_cas` | bool | Turn on content-addressable storage (SHA-256) |
+| `enable_compression` | bool | Add the compression middleware |
+| `enable_encryption` | bool | Parsed, but adds no middleware (see below) |
 
 ### Default Store
 
@@ -79,6 +76,7 @@ The configuration is validated during extension registration:
 - Each store must have a `name` and `storage_driver`
 - Store names must be unique
 - If `default` is set, it must reference an existing store name
+- `dashboard_content_secret`, when set, must be at least 32 bytes
 
 ### Backward Compatibility
 
@@ -90,15 +88,14 @@ Options set via `troveext` functions are merged with YAML configuration:
 
 ```go
 troveext.New(
-    troveext.WithBasePath("/storage/v1"),
     troveext.WithConfig(troveext.Config{
-        DriverDSN:     "file:///data/storage",
+        StorageDriver: "file:///data/storage",
         DefaultBucket: "uploads",
-        CASAlgorithm:  "blake3",
+        EnableCAS:     true,
     }),
-    troveext.WithDisableRoutes(),
     troveext.WithDisableMigrate(),
     troveext.WithGroveDatabase("analytics-db"),
+    troveext.WithTroveOption(trove.WithCAS(cas.AlgBlake3)), // a different CAS hash
 )
 ```
 
@@ -106,9 +103,9 @@ troveext.New(
 
 | Function | Description |
 |----------|-------------|
-| `troveext.WithBasePath(path)` | Set the HTTP route prefix |
+| `troveext.WithBasePath(path)` | Sets `base_path`, which nothing reads yet |
 | `troveext.WithConfig(cfg)` | Provide a full `troveext.Config` struct |
-| `troveext.WithDisableRoutes()` | Skip HTTP route registration |
+| `troveext.WithDisableRoutes()` | Sets `disable_routes`, which has no effect while no routes are mounted |
 | `troveext.WithDisableMigrate()` | Skip automatic database migration |
 | `troveext.WithGroveDatabase(name)` | Use a named Grove DB from DI for metadata |
 | `troveext.WithTroveOption(opt)` | Add a `trove.Option` applied during initialization |
@@ -129,32 +126,37 @@ Programmatic store entries take precedence over YAML entries with the same name.
 
 Configuration sources merge in this order:
 
-1. **YAML config** -- `extensions.trove` key, then `trove` key
-2. **Programmatic options** -- Values set via option functions
-3. **Defaults** -- Built-in fallback values
+1. YAML config: the `extensions.trove` key, then the `trove` key
+2. Programmatic options: values set with option functions
+3. Defaults: built-in fallback values
 
-YAML values take precedence over programmatic values for the same field. Programmatic values fill in anything YAML does not set. Boolean flags like `disable_routes` are additive: if either source sets it to `true`, it stays `true`.
+YAML values take precedence over programmatic values for the same field, and programmatic values fill in anything YAML leaves empty. Boolean flags like `disable_migrate` are additive: if either source sets one to `true`, it stays `true`.
+
+## Settings that don't do anything yet
+
+- `base_path` (default `/trove`) and `disable_routes` are parsed, but the extension mounts no REST routes, so neither changes anything. Mount `extension/handler` yourself. See [REST API](/docs/integration/rest-api).
+- `enable_encryption` doesn't add encryption middleware. It only marks the store as encrypted in the dashboard. Add `encrypt.New(...)` through `WithTroveOption(trove.WithMiddleware(...))`.
 
 ## Driver DSN Reference
 
-The `driver_dsn` (or `storage_driver` in multi-store entries) field determines which storage backend Trove uses. Each driver is identified by a URI scheme:
+The `storage_driver` field (at the top level or in a store entry) picks the storage backend. Each driver is identified by a URI scheme:
 
 | Driver | DSN Format | Example |
 |--------|-----------|---------|
 | Local filesystem | `file:///path` | `file:///data/storage` |
 | Local filesystem | `local://./relative/path` | `local://./storages/local` |
 | In-memory | `mem://` | `mem://` |
-| Amazon S3 | `s3://bucket?region=...&endpoint=...` | `s3://my-bucket?region=us-east-1` |
-| Google Cloud Storage | `gs://bucket` | `gs://my-bucket` |
-| Azure Blob Storage | `azblob://container` | `azblob://my-container` |
-| SFTP | `sftp://user@host/path` | `sftp://user@storage.example.com/data` |
+| Amazon S3 | `s3://REGION/BUCKET` | `s3://us-east-1/my-bucket` |
+| Google Cloud Storage | `gcs://PROJECT_ID/BUCKET` | `gcs://my-project/my-bucket` |
+| Azure Blob Storage | `azure://ACCOUNT_NAME/CONTAINER?key=ACCESS_KEY` | `azure://myaccount/uploads?key=...` |
+| SFTP | `sftp://user:pass@host:22/basepath` | `sftp://deploy:secret@storage.example.com:22/data` |
 
 The local driver accepts both `file://` (absolute paths) and `local://` (relative paths) schemes. Relative paths are resolved from the current working directory.
 
 S3-compatible stores (MinIO, DigitalOcean Spaces, Backblaze B2) use the `s3://` scheme with the `endpoint` query parameter:
 
 ```yaml
-driver_dsn: "s3://my-bucket?region=us-east-1&endpoint=https://minio.local:9000"
+storage_driver: "s3://KEY:SECRET@us-east-1/my-bucket?endpoint=http://localhost:9000&path_style=true"
 ```
 
 ### Driver Registry
@@ -170,14 +172,14 @@ Storage drivers register themselves in a global registry via their `init()` func
 | `drivers/azuredriver` | `azure` |
 | `drivers/sftpdriver` | `sftp` |
 
-In multi-store mode, ensure you import the driver packages your stores need so their `init()` functions register the factories.
+The extension imports `localdriver` and `memdriver` itself. For the others, blank-import the driver package (`_ "github.com/xraph/trove/drivers/s3driver"`) so its `init()` registers the scheme.
 
 ## Grove Database
 
 The `grove_database` field tells Trove which Grove database instance to use for its metadata tables (buckets, objects, uploads, CAS index, quotas).
 
-- If `grove_database` is set, Trove resolves a **named** Grove DB: `vessel.InjectNamed[*grove.DB](container, name)`
-- If omitted or set to `"default"`, Trove uses the **default** Grove DB: `vessel.Inject[*grove.DB](container)`
+- If `grove_database` is set, Trove resolves that named Grove DB: `vessel.InjectNamed[*grove.DB](container, name)`. Any non-empty value is treated as a name.
+- If it's empty, Trove uses the default Grove DB (`vessel.Inject[*grove.DB](container)`) when there is one, and stores no metadata when there isn't.
 
 This lets you run Trove metadata on a dedicated database separate from your application data by pointing `grove_database` at a named Grove database entry.
 
@@ -185,13 +187,13 @@ In multi-store mode, each store can reference a different Grove database. This k
 
 ## Environment Variables
 
-DSN values and other configuration strings can reference environment variables in your YAML config. This is handled by Forge's config loader:
+DSN values and other strings in your YAML config can reference environment variables, with `${VAR}` or `${VAR:-default}`. Forge's config loader expands them:
 
 ```yaml
 extensions:
   trove:
-    driver_dsn: "${TROVE_DRIVER_DSN}"
-    grove_database: "${TROVE_GROVE_DB:-default}"
+    storage_driver: "${TROVE_STORAGE_DRIVER}"
+    grove_database: "${TROVE_GROVE_DB:-metadata}"
 ```
 
 This keeps secrets out of config files and lets you vary configuration across environments without changing YAML.

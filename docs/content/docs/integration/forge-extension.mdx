@@ -1,80 +1,141 @@
 ---
 title: "Forge Extension"
-description: "Integrating Trove into a Forge application with auto-discovery, DI, config, and lifecycle management."
+description: "Integrating Trove into a Forge application with DI, config, and lifecycle management."
 ---
 
-The Trove Forge extension adapts the core object storage engine as a first-class Forge extension. It handles configuration loading, Grove database resolution, automatic migrations, route registration, and DI provision.
+import { Callout } from "fumadocs-ui/components/callout";
+
+The `github.com/xraph/trove/extension` module plugs Trove into a [Forge](https://github.com/xraph/forge) app. It opens the storage driver from a DSN during `Register`, creates the default bucket, keeps object and bucket metadata in a Grove database when one is in the container, provides `*trove.Trove` through DI, reports health and closes the driver on shutdown. It's a separate module and needs Go 1.26, the same as Forge.
+
+```bash
+go get github.com/xraph/trove/extension@latest
+go get github.com/xraph/trove/drivers/s3driver@latest
+```
 
 ## Quick Start
 
 ```go
 import (
+    "net/http"
+    "strings"
+
     "github.com/xraph/forge"
+    "github.com/xraph/trove"
+    _ "github.com/xraph/trove/drivers/s3driver"
     troveext "github.com/xraph/trove/extension"
 )
 
-app := forge.New(
-    forge.WithExtensions(
-        troveext.New(),
-    ),
-)
+app := forge.NewApp(forge.AppConfig{
+    Name:        "files",
+    HTTPAddress: ":8080",
+    Extensions: []forge.Extension{
+        troveext.New(troveext.WithConfig(troveext.Config{
+            StorageDriver: "s3://us-east-1/my-bucket",
+            DefaultBucket: "uploads",
+        })),
+    },
+})
+
+err := app.Router().POST("/notes", func(ctx forge.Context) error {
+    t, err := forge.Inject[*trove.Trove](app.Container())
+    if err != nil {
+        return err
+    }
+
+    info, err := t.Put(ctx.Context(), "uploads", "notes/hello.txt", strings.NewReader("hello"))
+    if err != nil {
+        return err
+    }
+
+    return ctx.JSON(http.StatusCreated, info)
+})
 ```
 
-With a YAML config:
-
-```yaml
-extensions:
-  trove:
-    driver_dsn: "file:///data/storage"
-    grove_database: "default"
-    base_path: "/trove/v1"
-```
+The extension registers the `file`, `local` and `mem` schemes itself. For S3, GCS, Azure or SFTP, blank-import the driver package so its scheme is registered. With no `storage_driver` at all you get an in-memory store, which is handy in tests and a surprise in production.
 
 ## Configuration
 
-The extension supports a three-phase config merge: YAML file, programmatic options, then defaults.
+The extension reads `extensions.trove` first, then falls back to a top-level `trove` key. YAML wins for string fields, and a `true` you set in code turns a flag on even when YAML leaves it off.
 
 ### YAML Keys
-
-The extension checks `extensions.trove` first, then falls back to `trove`:
 
 ```yaml
 extensions:
   trove:
-    driver_dsn: "file:///data/storage"     # Storage driver DSN
-    grove_database: "default"              # Named Grove DB from DI
-    base_path: "/trove/v1"                 # HTTP route prefix
-    disable_routes: false                  # Skip HTTP route registration
-    disable_migrate: false                 # Skip auto-migration
-    default_bucket: "default"              # Default bucket name
-    cas_algorithm: "sha256"                # CAS hash: sha256, blake3, xxhash
+    storage_driver: "file:///data/storage"  # Storage driver DSN
+    grove_database: "default"               # Named Grove DB from DI
+    disable_migrate: false                  # Skip metadata migrations
+    default_bucket: "uploads"               # Default bucket, created at startup
+    enable_cas: false                       # CAS with SHA-256
+    enable_compression: false               # Zstandard middleware
 ```
+
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `storage_driver` | in-memory | Storage DSN, resolved through the driver registry |
+| `default_bucket` | `default` | Bucket used when you don't name one, created at startup |
+| `grove_database` | unnamed `*grove.DB` | Which named Grove database holds the metadata |
+| `disable_migrate` | `false` | Skip the metadata migrations |
+| `enable_cas` | `false` | Turn on CAS with SHA-256 |
+| `enable_compression` | `false` | Add the Zstandard compression middleware |
+| `enable_encryption` | `false` | Parsed, but adds no middleware. See below |
+| `stores`, `default` | | Multi-store mode, below |
+| `dashboard_content_path` | `/dashboard/trove/content` | Where the dashboard content route mounts |
+| `dashboard_max_upload_bytes` | 64 MiB | Largest upload the dashboard accepts |
+| `dashboard_content_secret` | random per process | Signs content links, at least 32 bytes. Set it when you run more than one instance |
+| `base_path`, `disable_routes` | `/trove`, `false` | Parsed, but the extension mounts no REST routes yet, so they have no effect |
+
+<Callout type="warn">
+`enable_encryption` doesn't add encryption middleware. The flag only shows up as "configured" in the dashboard. To encrypt objects, pass the middleware yourself: `troveext.WithTroveOption(trove.WithMiddleware(encrypt.New(encrypt.WithKeyProvider(kp))))`.
+</Callout>
 
 ### Programmatic Options
 
 ```go
 troveext.New(
-    troveext.WithBasePath("/storage/v1"),
     troveext.WithConfig(troveext.Config{
-        DriverDSN:     "file:///data/storage",
+        StorageDriver: "file:///data/storage",
         DefaultBucket: "uploads",
     }),
-    troveext.WithDisableRoutes(),
     troveext.WithDisableMigrate(),
     troveext.WithGroveDatabase("analytics-db"),
+    troveext.WithTroveOption(trove.WithRoute("*.log", "archive")),
 )
 ```
 
+| Option | What it does |
+|--------|--------------|
+| `WithConfig(cfg)` | Set the whole `Config` |
+| `WithGroveDatabase(name)` | Use a named `*grove.DB` for metadata |
+| `WithStore(s)` | Use your own metadata `store.Store` |
+| `WithDisableMigrate()` | Skip the metadata migrations |
+| `WithTroveOption(opt)` | Pass a `trove.Option` (middleware, routing, CAS) to every instance |
+| `WithTroveOptionFor(store, opt)` | Pass a `trove.Option` to one named store |
+| `WithFileStore(name, drv)`, `WithFileStoreDSN(name, dsn)` | Add a named store |
+| `WithDefaultFileStore(name)` | Pick the default store |
+| `WithBasePath(p)`, `WithDisableRoutes()` | Set fields nothing reads yet |
+
+## REST API
+
+The extension doesn't mount any REST routes today. Its route registration is an empty placeholder, which is why `base_path` and `disable_routes` do nothing. The handlers in `extension/handler` (buckets, objects, multipart uploads, CAS) form a plain `http.Handler` you build and mount yourself:
+
+```go
+import "github.com/xraph/trove/extension/handler"
+
+h := handler.New(ext.Trove(), ext.Store(), app.Logger())
+```
+
+See [REST API](/docs/integration/rest-api). The one route the extension does serve is the dashboard content route, covered in [Dashboard](/docs/integration/dashboard).
+
 ## Multi-Store Mode
 
-Trove supports multiple named file stores, each with its own storage driver and metadata database. This mirrors how Grove supports multiple named databases.
+Trove supports several named file stores, each with its own storage driver and metadata database, the way Grove supports several named databases.
 
 ### YAML Configuration
 
 ```yaml
 extensions:
   trove:
-    base_path: "/trove/v1"
     stores:
       - name: primary
         storage_driver: "s3://us-east-1/my-bucket"
@@ -88,7 +149,7 @@ extensions:
     default: primary
 ```
 
-Each store entry creates an independent `*trove.Trove` instance with its own storage driver, metadata database, middleware, and default bucket. The `default` field sets which store is used for unnamed DI injection.
+Each store entry creates its own `*trove.Trove` with its own storage driver, metadata database, middleware and default bucket. `default` picks the store you get as the unnamed `*trove.Trove`; without it, the first store is the default. Unlike single-store mode, the extension doesn't create each store's default bucket for you.
 
 ### Programmatic Options
 
@@ -101,7 +162,7 @@ troveext.New(
 )
 ```
 
-Or with pre-configured drivers:
+Or with drivers you've already opened:
 
 ```go
 troveext.New(
@@ -113,123 +174,98 @@ troveext.New(
 
 ### FileStoreConfig Fields
 
-Each store entry accepts these fields:
-
 | Field | Description |
 |-------|-------------|
 | `name` | Unique identifier for the store (required) |
 | `storage_driver` | DSN for the storage backend (required) |
 | `grove_database` | Named Grove DB for metadata |
-| `default_bucket` | Default bucket name |
-| `enable_cas` | Enable content-addressable storage |
-| `enable_encryption` | Auto-configure encryption middleware |
-| `enable_compression` | Auto-configure compression middleware |
+| `default_bucket` | Default bucket name (`default` if empty) |
+| `enable_cas` | Turn on content-addressable storage |
+| `enable_compression` | Add the compression middleware |
+| `enable_encryption` | Parsed, but adds no middleware |
 
 ### DI Integration (Multi-Store)
 
 In multi-store mode, Trove registers:
 
-- **Default `*trove.Trove`** (unnamed) for backward-compatible injection
-- **Named `*trove.Trove`** for each store via `vessel.ProvideNamed`
-- **`*TroveManager`** for accessing all stores
+- the default `*trove.Trove` (unnamed)
+- a named `*trove.Trove` for each store
+- a `*TroveManager` for reaching all of them
 
 ```go
 // Inject the default store
-t, err := vessel.Inject[*trove.Trove](fapp.Container())
+t, err := vessel.Inject[*trove.Trove](app.Container())
 
 // Inject a named store
-archive, err := vessel.InjectNamed[*trove.Trove](fapp.Container(), "archive")
+archive, err := vessel.InjectNamed[*trove.Trove](app.Container(), "archive")
 
-// Inject the manager for full access
-mgr, err := vessel.Inject[*troveext.TroveManager](fapp.Container())
-primary, _ := mgr.Get("primary")
+// Inject the manager
+mgr, err := vessel.Inject[*troveext.TroveManager](app.Container())
+primary, err := mgr.Get("primary")
 ```
 
 ### TroveManager API
 
 | Method | Description |
 |--------|-------------|
-| `Get(name)` | Get a named `*trove.Trove` instance |
+| `Get(name)` | Get a named `*trove.Trove` |
 | `GetStore(name)` | Get a named metadata store |
 | `Default()` | Get the default `*trove.Trove` |
 | `DefaultStore()` | Get the default metadata store |
 | `DefaultName()` | Name of the default store |
 | `SetDefault(name)` | Change the default |
-| `All()` | Map of all name-to-Trove instances |
-| `Len()` | Number of registered stores |
+| `All()` | Map of every name to its `*trove.Trove` |
+| `Len()` | Number of stores |
+| `Close(ctx)` | Close every store |
 
 ### Accessor Methods
 
-The extension provides backward-compatible accessors:
-
 ```go
-ext.Trove()   // Default *trove.Trove (works in both single and multi-store)
+ext.Trove()   // Default *trove.Trove (single or multi-store)
 ext.Store()   // Default metadata store
 ext.Manager() // *TroveManager (nil in single-store mode)
 ```
 
 ## Lifecycle
 
-The extension follows Forge's lifecycle:
-
 ### Register
 
-**Single-store mode:**
+Single-store mode:
 
-1. Load and merge configuration (YAML + programmatic + defaults)
-2. Resolve `*grove.DB` from DI (named or default)
-3. Run migrations (creates 5 tables + indexes)
-4. Open the storage driver from `driver_dsn`
-5. Create the `*trove.Trove` instance with middleware pipeline
-6. Register HTTP routes on `fapp.Router()`
-7. Provide `*trove.Trove` to DI via `vessel.Provide()`
+1. Load and merge configuration (YAML, programmatic options, defaults).
+2. Resolve a `*grove.DB` from DI (the named one, or any default) and build the metadata store from its driver.
+3. Run the metadata migrations, unless `disable_migrate` is set.
+4. Open the storage driver from `storage_driver` (or an in-memory driver).
+5. Open the `*trove.Trove` with the configured options and create the default bucket.
+6. Register the dashboard contributor.
+7. Provide `*trove.Trove` through DI.
 
-**Multi-store mode:**
+Multi-store mode:
 
-1. Load and merge configuration, validate store entries
-2. For each store: resolve storage driver, resolve Grove DB, build metadata store, run migrations, create `*trove.Trove`
-3. Determine default store (explicit > config > first entry)
-4. Register HTTP routes
-5. Provide `*TroveManager`, default `*trove.Trove`, and named instances to DI
+1. Load and merge configuration and validate the store entries.
+2. For each store: open the storage driver, resolve its Grove DB, build the metadata store, run migrations, open the `*trove.Trove`.
+3. Pick the default store (the `WithDefaultFileStore` option, then `default`, then the first entry).
+4. Register the dashboard contributor.
+5. Provide the `*TroveManager`, the default `*trove.Trove` and the named instances through DI.
+
+The extension looks the Grove database up while it registers and doesn't declare a dependency on Grove, so list the Grove extension before Trove.
 
 ### Start / Stop
 
-Start marks the extension as running. Stop closes all underlying storage drivers (all stores in multi-store mode).
+`Start` does nothing. `Stop` closes the storage drivers (every store in multi-store mode).
 
 ### Health
 
-In single-store mode, pings the metadata database. In multi-store mode, health-checks all registered stores.
-
-## DI Integration
-
-After registration, any component can inject Trove:
-
-```go
-import (
-    "github.com/xraph/trove"
-    "github.com/xraph/vessel"
-)
-
-t, err := vessel.Inject[*trove.Trove](fapp.Container())
-```
+In single-store mode, `Health` pings the metadata database (and passes when there isn't one). In multi-store mode it calls `Health` on every store.
 
 ## Grove Database Resolution
 
 The extension resolves a Grove database from DI for its metadata store:
 
-- If `grove_database` is set, looks up a named DB: `vessel.InjectNamed[*grove.DB](container, name)`
-- Otherwise, uses the default: `vessel.Inject[*grove.DB](container)`
-- Supports PostgreSQL, SQLite, and MongoDB backends via Grove's driver detection
+- If `grove_database` is set, it looks up that named DB.
+- Otherwise it uses the default `*grove.DB`, if there is one. Without one, metadata isn't stored and the extension carries on.
+- PostgreSQL, SQLite and MongoDB are supported, picked by the Grove driver name.
 
-## Auto-Discovery
+## Ecosystem hooks
 
-The extension auto-detects ecosystem services from DI:
-
-| Service | What Happens |
-|---------|-------------|
-| **Vault** (`store.Store`) | Encryption middleware auto-configured with Vault-managed keys |
-| **Chronicle** (`chronicle.Emitter`) | Audit events emitted for all storage operations |
-| **Dispatch** (`*engine.Engine`) | Background jobs registered (cleanup, GC) |
-| **Warden** (`*warden.Engine`) | Authorization middleware applied to routes |
-
-All auto-discovery is optional. If a service isn't in DI, it's silently skipped.
+`extension/hooks` has helpers for Chronicle (`NewChronicleHook`), Vault (`NewVaultHook`, whose `KeyProvider` feeds the encrypt middleware), Warden (`NewWardenHook`, an HTTP middleware), Dispatch (`NewDispatchHook`, which registers cleanup and CAS GC jobs) and metrics (`NewMetricsHook`). The extension doesn't discover or wire any of them. You create and call them yourself.

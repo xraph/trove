@@ -5,47 +5,49 @@ description: "Trove is a multi-backend object storage engine for Go with composa
 
 import { Cards, Card } from "fumadocs-ui/components/card";
 
-Trove is a multi-backend object storage engine for Go that delivers a unified API across storage backends. It answers the fundamental question: **"How do I store and retrieve objects with maximum flexibility and zero vendor lock-in?"**
+Trove is a multi-backend object storage library for Go. You write against one API (`Put`, `Get`, `List`, `Copy`, buckets) and pick the backend when you start up, so the same code runs on local disk in development and on S3 in production.
 
-Trove supports multiple storage backends through dedicated drivers:
+Trove supports these backends through dedicated drivers:
 
-- **Local Filesystem** — Atomic file operations with sidecar `.meta.json` metadata
-- **In-Memory** — Ephemeral storage for testing and caching
-- **Amazon S3** — S3-compatible storage (AWS, MinIO, R2, DigitalOcean Spaces)
-- **Google Cloud Storage** — GCS with resumable uploads and compose-based multipart
-- **Azure Blob** — Block blob storage with SAS tokens and multipart staging
-- **SFTP** — Remote file storage over SSH with directory-as-bucket layout
+- Local filesystem: files on disk with sidecar `.meta.json` metadata
+- In-memory: ephemeral storage for tests
+- Amazon S3: AWS and S3-compatible stores such as MinIO and R2
+- Google Cloud Storage: GCS, with compose-based multipart uploads
+- Azure Blob: block blob storage with SAS-signed links and staged multipart uploads
+- SFTP: remote files over SSH, with one directory per bucket
 
 ## Key Features
 
-- **Unified Storage API** — Same `Put`, `Get`, `Delete`, `Head`, `List`, `Copy` operations across all backends
-- **Composable Middleware** — Direction-aware pipeline with compression (zstd), encryption (AES-256-GCM), deduplication (BLAKE3), virus scanning (ClamAV), and watermarking
-- **Streaming Engine** — Chunked transfers with configurable sizes, backpressure handling, pause/resume, and managed stream pools
-- **Content-Addressable Storage** — Store by content hash with BLAKE3, SHA-256, or XXHash, plus reference counting and garbage collection
-- **Virtual Filesystem** — `io/fs.FS`-compatible interface for hierarchical access over flat object storage
-- **Multi-Backend Routing** — Glob patterns and custom functions to route objects to the right backend
-- **Capability Interfaces** — Opt-in driver capabilities for multipart, presigned URLs, server-side copy, versioning, and notifications
-- **Forge Integration** — First-class Forge extension with REST API, ORM models, migrations, and ecosystem hooks
+- Unified storage API: the same `Put`, `Get`, `Delete`, `Head`, `List` and `Copy` on every backend
+- Composable middleware: compression (zstd), encryption (AES-256-GCM), duplicate detection, virus scanning (ClamAV) and watermarking, scoped to buckets or keys
+- Streaming engine: chunked transfers with backpressure, pause and resume, progress hooks and stream pools
+- Content-addressable storage: store by SHA-256, BLAKE3 or XXHash hash, with reference counts and pinning
+- Virtual filesystem: a directory-shaped view of a bucket, with an `io/fs.FS` adapter
+- Multi-backend routing: glob patterns and functions that send keys to named backends
+- Capability interfaces: multipart uploads, presigned URLs and range reads on the S3, GCS and Azure drivers
+- Forge integration: an extension that opens drivers from DSNs, provides `*trove.Trove` through DI and keeps metadata in Grove
 
 ## Quick Example
 
 ```go
 // Create and open the driver, then pass it to Trove
 drv := localdriver.New()
-drv.Open(ctx, "file:///tmp/storage")
+if err := drv.Open(ctx, "file:///tmp/storage"); err != nil {
+    log.Fatal(err)
+}
 
-t, _ := trove.Open(drv,
+t, err := trove.Open(drv,
     trove.WithDefaultBucket("uploads"),
-    trove.WithMiddleware(
-        compress.New(),
-        encrypt.New(encrypt.WithKeyProvider(kp)),
-    ),
+    trove.WithMiddleware(encrypt.New(encrypt.WithKeyProvider(kp))),
 )
+if err != nil {
+    log.Fatal(err)
+}
 defer t.Close(ctx)
 
 // Store and retrieve objects
-t.Put(ctx, "uploads", "photo.jpg", reader)
-obj, _ := t.Get(ctx, "uploads", "photo.jpg")
+_, err = t.Put(ctx, "uploads", "photo.jpg", reader)
+obj, err := t.Get(ctx, "uploads", "photo.jpg")
 defer obj.Close()
 ```
 
@@ -54,7 +56,7 @@ defer obj.Close()
 <Cards>
   <Card title="Getting Started" href="/docs/getting-started" description="Install Trove and store your first object in under 5 minutes." />
   <Card title="Architecture" href="/docs/architecture" description="Understand the package structure, driver interface, and middleware pipeline." />
-  <Card title="Storage Drivers" href="/docs/storage" description="Learn about the 6 storage backends and their capabilities." />
+  <Card title="Storage Drivers" href="/docs/concepts/driver-system" description="Learn about the 6 storage backends and their capabilities." />
   <Card title="Middleware" href="/docs/storage/middleware" description="Composable middleware for compression, encryption, deduplication, and more." />
   <Card title="Streaming Engine" href="/docs/storage/streaming-engine" description="Chunked transfers with backpressure, pause/resume, and stream pools." />
   <Card title="Virtual Filesystem" href="/docs/storage/vfs" description="io/fs.FS-compatible interface over flat object storage." />

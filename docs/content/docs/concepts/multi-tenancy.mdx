@@ -1,109 +1,74 @@
 ---
 title: "Multi-Tenancy"
-description: "Tenant isolation with per-tenant keys, quota enforcement, and scoped middleware."
+description: "What Trove gives you for tenant isolation today: tenant keys in metadata, scoped middleware and routing."
 ---
 
-Trove provides built-in support for multi-tenant storage through tenant keys on data models, per-tenant quota enforcement, and middleware scoping. When deployed with the Forge extension, tenant identification is handled automatically via the `X-Subject-ID` header.
+import { Callout } from "fumadocs-ui/components/callout";
 
-## Tenant Key Model
+Trove doesn't isolate tenants for you. It has no notion of a current tenant, enforces no quotas and filters nothing by tenant on its own. What it does give you are building blocks: a `TenantKey` field on the extension's metadata models, middleware scopes and routing functions that can look at your request context, and per-store separation in the Forge extension.
 
-Every storage model carries a `TenantKey` field that associates the record with a specific tenant:
+<Callout type="warn">
+Earlier versions of this page described automatic tenant stamping from an `X-Subject-ID` header and per-tenant quota enforcement on `Put`. Neither exists. `trove.ErrQuotaExceeded` is only returned when a storage backend itself reports a quota or rate limit.
+</Callout>
 
-### Bucket Model
+## Tenant Keys in the Metadata Store
+
+The extension's metadata models (`github.com/xraph/trove/extension/model`) carry a `TenantKey`:
 
 ```go
 type Bucket struct {
-    ID        string `json:"id"`
-    Name      string `json:"name"`
-    TenantKey string `json:"tenant_key,omitempty"`
+    ID        string
+    Name      string
+    TenantKey string
     // ... other fields
 }
-```
 
-### Object Model
-
-```go
 type Object struct {
-    ID        string `json:"id"`
-    BucketID  string `json:"bucket_id"`
-    Key       string `json:"key"`
-    TenantKey string `json:"tenant_key,omitempty"`
+    ID        string
+    BucketID  string
+    Key       string
+    TenantKey string
     // ... other fields
 }
-```
 
-### Quota Model
-
-Quotas are tracked per-tenant with both byte and object count limits:
-
-```go
 type Quota struct {
-    TenantKey    string `json:"tenant_key"`
-    UsedBytes    int64  `json:"used_bytes"`
-    LimitBytes   int64  `json:"limit_bytes"`
-    ObjectCount  int64  `json:"object_count"`
-    LimitObjects int64  `json:"limit_objects"`
-    UpdatedAt    time.Time `json:"updated_at"`
+    TenantKey    string
+    UsedBytes    int64
+    LimitBytes   int64
+    ObjectCount  int64
+    LimitObjects int64
+    UpdatedAt    time.Time
 }
 ```
 
-## Per-Tenant Quota Enforcement
-
-When a tenant's usage exceeds their configured limits, `Put` operations return `trove.ErrQuotaExceeded`:
+Nothing fills these in automatically. If you keep metadata there, set `TenantKey` yourself and filter with the store's list option:
 
 ```go
-// Upload fails when quota is exceeded
-_, err := t.Put(ctx, "uploads", "large-file.bin", data)
-if errors.Is(err, trove.ErrQuotaExceeded) {
-    // Tenant has exceeded their storage quota
-    http.Error(w, "Storage quota exceeded", http.StatusInsufficientStorage)
-}
-```
-
-Quota limits apply to both total bytes and total object count. The Forge extension enforces these limits automatically in the upload handlers.
-
-## Tenant Identification
-
-### With Forge Extension
-
-When running inside Forge, the tenant is identified by the `X-Subject-ID` HTTP header, which is typically set by authentication middleware (e.g., from a JWT or API key).
-
-```
-PUT /api/trove/buckets/uploads/objects/report.pdf
-X-Subject-ID: tenant-abc
-Content-Type: application/pdf
-```
-
-The extension automatically stamps every created bucket and object with the subject ID as the `TenantKey`.
-
-### Standalone Mode
-
-Without Forge, set the tenant context explicitly using the store's tenant-aware list options or by managing the `TenantKey` field directly when writing metadata:
-
-```go
-// Filter objects by tenant when listing
-objects, err := store.ListObjects(ctx, "uploads",
+objects, err := metaStore.ListObjects(ctx, bucketID,
     store.WithTenantKey("tenant-abc"),
 )
 ```
 
+`ListBuckets(ctx, tenantKey)` filters buckets the same way. The `trove_quotas` table and `GetQuota`, `SetQuota` and `UpdateQuotaUsage` exist for you to build quota checks on, but no Trove code reads them. See [Grove Store Layer](/docs/integration/grove-store).
+
 ## Middleware Scoping by Tenant
 
-Use `ScopeFunc` to apply middleware only to specific tenants. This enables per-tenant encryption keys, compression settings, or scanning policies.
+A `ScopeFunc` sees the request context, so you can apply middleware to one tenant's traffic. Put the tenant in the context yourself, before calling `Put` or `Get`:
 
 ```go
 import "github.com/xraph/trove/middleware"
 
-// Extract tenant from context
+type tenantKey struct{}
+
 tenantScope := &middleware.ScopeFunc{
     Fn: func(ctx context.Context, bucket, key string) bool {
-        tenantID := ctx.Value("tenant_id").(string)
+        tenantID, _ := ctx.Value(tenantKey{}).(string)
         return tenantID == "acme-corp"
     },
     Desc: "tenant(acme-corp)",
 }
 
-// Encrypt only Acme Corp's data with their key
+// Encrypt only Acme Corp's data with their key.
 t, _ := trove.Open(drv,
     trove.WithScopedMiddleware(tenantScope,
         encrypt.New(encrypt.WithKeyProvider(acmeKeyProvider)),
@@ -111,9 +76,13 @@ t, _ := trove.Open(drv,
 )
 ```
 
+<Callout type="info">
+The resolver caches pipelines by bucket and key, not by context. A `ScopeFunc` that answers differently for two tenants writing the same bucket and key can get the cached answer from the first call. Keep tenant data under tenant-specific keys or buckets so the cache key differs.
+</Callout>
+
 ### Per-Tenant Encryption Keys
 
-Combine `ScopeFunc` with a dynamic `KeyProvider` that returns different keys per tenant:
+A `KeyProvider` also receives the context, so one encrypt middleware can return a different key per tenant:
 
 ```go
 type TenantKeyProvider struct {
@@ -121,7 +90,7 @@ type TenantKeyProvider struct {
 }
 
 func (p *TenantKeyProvider) Key(ctx context.Context) ([]byte, error) {
-    tenantID := ctx.Value("tenant_id").(string)
+    tenantID, _ := ctx.Value(tenantKey{}).(string)
     return p.vault.GetKey(ctx, "trove/keys/"+tenantID)
 }
 
@@ -132,34 +101,35 @@ t, _ := trove.Open(drv,
 )
 ```
 
-## Integration with Warden
+## Routing Tenants to Backends
 
-When used alongside the Warden extension (Forge's authorization engine), Trove checks access policies before every operation. Warden policies can be tenant-scoped:
+`trove.WithRouteFunc` decides the backend from the bucket and key, so a naming convention lets you keep tenants on separate backends:
 
 ```go
-// Warden policy: only allow access to own tenant's buckets
-// Policy evaluation happens in the Forge extension's middleware layer
-
-// The X-Subject-ID header identifies the tenant
-// Warden checks: does subject "tenant-abc" have permission to
-// read from bucket "uploads" with tenant_key "tenant-abc"?
+t, _ := trove.Open(shared,
+    trove.WithBackend("acme", acmeDriver),
+    trove.WithRouteFunc(func(bucket, key string) string {
+        if strings.HasPrefix(bucket, "acme-") {
+            return "acme"
+        }
+        return ""
+    }),
+)
 ```
 
-This provides defense-in-depth: tenant isolation at the data model level (TenantKey filtering), the quota level (per-tenant limits), the middleware level (scoped transformations), and the authorization level (Warden policies).
+With the Forge extension you can go further and give a tenant its own named store (`stores:` in config), each with its own driver and metadata database.
 
-## Tenant Isolation Guarantees
+## Authorization
 
-| Layer | Mechanism | Prevents |
-|-------|-----------|----------|
-| Data model | `TenantKey` field on Bucket, Object, Quota | Cross-tenant data access |
-| Quota | Per-tenant byte and object limits | One tenant consuming all storage |
-| Middleware | `ScopeFunc` with tenant predicate | Applying wrong encryption keys |
-| Authorization | Warden policy checks on `X-Subject-ID` | Unauthorized API access |
-| Routing | Per-tenant backend routing | Co-mingling tenant data on disk |
+`extension/hooks.NewWardenHook` gives you an HTTP middleware for the REST handler that checks each request against Warden, using the `X-Subject-ID` header as the subject. It authorizes a subject against a resource type and action. It doesn't know about tenants, and you have to make sure the header comes from your own authentication layer. See [Ecosystem Integration](/docs/integration/ecosystem).
 
-## Cross-Tenant Prevention
+## What You Have to Build
 
-- Listing operations are scoped by `TenantKey` -- tenants only see their own resources
-- There is no built-in API to query across tenants
-- Admin or superuser access requires explicit bypass logic in your application layer
-- Quota enforcement is per-tenant and cannot be circumvented by API calls
+| Need | What Trove provides | What you add |
+|------|---------------------|--------------|
+| Tenant on each record | `TenantKey` fields in the metadata store | Set it when you write metadata |
+| Tenant-filtered listings | `store.WithTenantKey`, `ListBuckets(ctx, tenantKey)` | Call them; `t.List` on the driver is never filtered |
+| Quotas | `trove_quotas` table and store methods | The checks and the usage updates |
+| Per-tenant encryption | `ScopeFunc`, context-aware `KeyProvider` | Put the tenant in the context |
+| Separate backends | `WithRouteFunc`, multi-store mode | A naming or config convention |
+| Access control | The Warden hook | A trusted subject header and tenant-aware policies |

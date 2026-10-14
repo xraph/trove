@@ -265,8 +265,8 @@ The full set of sentinel errors:
 | `trove.ErrBucketExists` | CreateBucket for a bucket that already exists |
 | `trove.ErrBucketEmpty` | Bucket name is an empty string |
 | `trove.ErrKeyEmpty` | Object key is an empty string |
-| `trove.ErrDriverClosed` | Operation after Close() |
-| `trove.ErrChecksumMismatch` | Integrity check failed |
+| `trove.ErrDriverClosed` | Declared for operations after `Close()`, but no built-in driver returns it yet |
+| `trove.ErrChecksumMismatch` | Declared for checksum verification, which isn't implemented, so nothing returns it |
 
 ## Working with ObjectInfo
 

@@ -21,7 +21,7 @@ hot := memdriver.New()
 hot.Open(ctx, "mem://")
 
 cold := s3driver.New()
-cold.Open(ctx, "s3://archive-bucket?region=us-east-1")
+cold.Open(ctx, "s3://us-east-1/archive-bucket")
 
 primary := localdriver.New()
 primary.Open(ctx, "file:///var/data/storage")
@@ -78,15 +78,15 @@ t, err := trove.Open(primary,
 
 When an operation is performed, the router resolves the target backend in this order:
 
-1. **Custom route functions** -- first non-empty return wins
-2. **Pattern routes** -- first matching pattern wins
-3. **Default driver** -- the primary driver passed to `Open`
+1. Custom route functions: first non-empty return wins
+2. Pattern routes: first matching pattern wins
+3. Default driver: the primary driver passed to `Open`
 
 This means route functions take precedence over pattern routes, and patterns take precedence over the default driver.
 
 ## Direct Backend Access
 
-Bypass routing entirely by accessing a named backend directly with `Backend()`. This returns a new `*Trove` handle pinned to that backend -- all operations go directly to it.
+Bypass routing entirely by accessing a named backend directly with `Backend()`. This returns a new `*Trove` handle pinned to that backend. All operations go directly to it.
 
 ```go
 // Get a handle to the cold storage backend

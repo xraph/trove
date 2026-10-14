@@ -10,7 +10,7 @@ import { Callout } from "fumadocs-ui/components/callout";
 ```
 trove/
 ├── trove.go              # Core Trove type and operations (Put, Get, Delete, Head, List, Copy)
-├── config.go             # Config type, DefaultConfig(), checksum and retry settings
+├── config.go             # Config type, DefaultConfig(), checksum and retry settings (stored, not applied yet)
 ├── options.go            # Functional options: WithBackend, WithRoute, WithVFS, etc.
 ├── errors.go             # Sentinel errors (ErrNotFound, ErrBucketEmpty, etc.)
 ├── driver/               # Driver interface + capability interfaces + option types
@@ -58,7 +58,7 @@ trove/
 ├── trovetest/            # Conformance test suite for driver implementations
 ├── internal/             # Internal utilities (router, checksum)
 │   ├── router.go         # Multi-backend router (pattern + function routing)
-│   └── checksum.go       # SHA-256, BLAKE3, XXHash integrity verification
+│   └── checksum.go       # SHA-256, BLAKE3, XXHash hashing helpers
 └── extension/            # Forge extension for DI and lifecycle integration
 ```
 
@@ -80,7 +80,7 @@ User Code
    │       (ctx, bucket, key). Matching WriteMiddleware
    │       are sorted by priority and chained.
    │
-   │       reader → [encrypt] → [compress] → ... → transformed reader
+   │       reader -> [mw 1] -> [mw 2] -> ... -> transformed reader
    │
    ├── 3. Router
    │       Resolve the backend for this (bucket, key):
@@ -93,7 +93,7 @@ User Code
            Backend-specific storage (filesystem, S3, GCS, ...)
 ```
 
-The `Get` (read) path is the reverse for middleware -- data flows from the driver through the read middleware pipeline (e.g., decryption, decompression) before reaching the caller.
+On the `Get` (read) path, data flows from the driver through the read middleware before it reaches the caller. The read pipeline runs in the same priority order as the write pipeline, not the reverse, so two byte-transforming middleware (compress and encrypt) don't round-trip today. See [Middleware](/docs/storage/middleware).
 
 ```
 User Code
@@ -104,7 +104,7 @@ User Code
    ├── 2. Router → resolve backend
    ├── 3. Driver.Get → *ObjectReader
    └── 4. Middleware Pipeline (Read)
-           reader → [decompress] → [decrypt] → ... → caller
+           reader -> [mw 1] -> [mw 2] -> ... -> caller
 ```
 
 ## Multi-Backend Routing
@@ -163,8 +163,8 @@ Each middleware declares which data paths it participates in:
 
 | Direction | Constant | Description |
 | --- | --- | --- |
-| Read | `DirectionRead` | Downloads / Gets -- wraps the reader after the driver |
-| Write | `DirectionWrite` | Uploads / Puts -- wraps the reader before the driver |
+| Read | `DirectionRead` | Downloads / Gets: wraps the reader after the driver |
+| Write | `DirectionWrite` | Uploads / Puts: wraps the reader before the driver |
 | ReadWrite | `DirectionReadWrite` | Both paths (e.g., encryption, compression) |
 
 ### Interfaces
@@ -192,7 +192,7 @@ Scopes control when a middleware is active. They are evaluated at runtime agains
 | `ScopeGlobal` | (default) | Every operation |
 | `ScopeBucket` | `ForBuckets("a", "b")` | Specific bucket names |
 | `ScopeKeyPattern` | `ForKeys("*.jpg", "docs/*")` | Glob patterns on keys |
-| `ScopeContentType` | `ForContentTypes("image/*")` | MIME type prefixes |
+| `ScopeContentType` | `ForContentTypes("image/*")` | Meant for MIME types. Today it compares the key's extension and doesn't match real content types |
 | `ScopeFunc` | `When(fn)` | Arbitrary predicate function |
 
 **Boolean combinators** compose scopes:
@@ -240,7 +240,7 @@ Registration[]
 
 ## Streaming Engine
 
-The streaming engine provides managed, chunked data transfer with backpressure, resumability, and lifecycle hooks. It is used for large object transfers where memory efficiency and progress tracking are critical.
+The streaming engine provides managed, chunked transfer with backpressure, offset tracking and lifecycle hooks. A stream carries chunks between your producer and your consumer; it doesn't read from or write to a driver by itself.
 
 ### Stream Lifecycle
 
@@ -340,8 +340,8 @@ GC(ctx)
    │       Returns all entries with RefCount=0 AND Pinned=false
    │
    ├── 2. For each entry:
-   │       ├── driver.Delete(bucket, key)  -- remove from storage
-   │       └── index.Delete(hash)          -- remove from index
+   │       ├── driver.Delete(bucket, key) : remove from storage
+   │       └── index.Delete(hash)         : remove from index
    │
    └── 3. Return GCResult { Scanned, Deleted, FreedBytes, Errors }
 ```
@@ -412,7 +412,7 @@ for _, e := range entries {
 
 ## Capability Interface Model
 
-The core `driver.Driver` interface is intentionally minimal. Advanced features are exposed via optional capability interfaces. Consumers use type assertions to check for and access these capabilities at runtime.
+The core `driver.Driver` interface is intentionally minimal. Advanced features are optional capability interfaces, and you check for them with a type assertion. The S3, GCS and Azure drivers implement multipart, presign and range reads. No built-in driver implements versioning, notifications, lifecycle rules or server-side copy yet.
 
 | Capability | Interface | Methods |
 | --- | --- | --- |
@@ -449,10 +449,10 @@ This pattern avoids bloating the base `Driver` interface. Drivers only implement
 
 Every entity in Trove uses a `id.ID` type based on [TypeID](https://github.com/jetify-com/typeid). IDs are:
 
-- **Prefixed** -- the prefix identifies the entity type (e.g., `obj_`, `str_`)
-- **K-sortable** -- UUIDv7-based suffix, so lexicographic order matches creation order
-- **Globally unique** -- collision-resistant across distributed systems
-- **URL-safe** -- no special characters, safe for use in paths and query strings
+- **Prefixed**: the prefix identifies the entity type (e.g., `obj_`, `str_`)
+- **K-sortable**: UUIDv7-based suffix, so lexicographic order matches creation order
+- **Globally unique**: collision-resistant across distributed systems
+- **URL-safe**: no special characters, safe for use in paths and query strings
 
 ### Prefixes
 
@@ -490,7 +490,7 @@ fmt.Println(parsed.Prefix()) // "obj"
 
 ```
 trove (core)
-├── trove/driver           (zero deps -- defines Driver, ObjectInfo, capability interfaces)
+├── trove/driver           (zero deps: defines Driver, ObjectInfo, capability interfaces)
 ├── trove/id               (external: go.jetify.com/typeid)
 ├── trove/internal          (depends on driver)
 ├── trove/middleware         (depends on driver)
@@ -501,7 +501,7 @@ trove (core)
 │   └── middleware/watermark(depends on middleware)
 ├── trove/stream            (depends on driver, id)
 ├── trove/cas               (depends on driver)
-├── trove/vfs               (depends on driver -- uses Storage interface to avoid circular import)
+├── trove/vfs               (depends on driver: uses Storage interface to avoid circular import)
 ├── trove/drivers/localdriver   (depends on driver)
 ├── trove/drivers/memdriver     (depends on driver)
 ├── trove/drivers/s3driver      (depends on driver, aws-sdk-go-v2)
@@ -512,4 +512,4 @@ trove (core)
 └── trove/extension          (depends on trove, Forge framework)
 ```
 
-The `stream` package depends only on `driver` and `id` -- no dependency on the core `trove` package. The `vfs` package defines a `Storage` interface mirroring Trove's methods to avoid circular imports. The `cas` package depends only on `driver`, keeping it composable outside of Trove.
+The `stream` package depends only on `driver` and `id`: no dependency on the core `trove` package. The `vfs` package defines a `Storage` interface mirroring Trove's methods to avoid circular imports. The `cas` package depends only on `driver`, keeping it composable outside of Trove.

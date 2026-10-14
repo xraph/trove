@@ -54,7 +54,7 @@ if err != nil {
 }
 
 fmt.Println(info.Name())    // "readme.md"
-fmt.Println(info.Size())    // 13
+fmt.Println(info.Size())    // 12
 fmt.Println(info.IsDir())   // false
 fmt.Println(info.ModTime()) // time.Time of last modification
 ```
@@ -116,7 +116,11 @@ if err != nil {
 
 ### Skipping Directories and Stopping Early
 
+Return the standard library's `fs.SkipDir` or `fs.SkipAll`. Since this guide calls the VFS variable `fs`, import `io/fs` under another name:
+
 ```go
+import stdfs "io/fs"
+
 fs.Walk(ctx, "", func(path string, info *vfs.FileInfo, err error) error {
     if err != nil {
         return err
@@ -124,13 +128,13 @@ fs.Walk(ctx, "", func(path string, info *vfs.FileInfo, err error) error {
 
     // Skip the "temp" directory entirely.
     if info.IsDir() && info.Name() == "temp" {
-        return vfs.SkipDir
+        return stdfs.SkipDir
     }
 
     // Stop walking after finding a specific file.
     if info.Name() == "target.txt" {
         fmt.Println("Found:", path)
-        return vfs.SkipAll
+        return stdfs.SkipAll
     }
 
     return nil
@@ -255,7 +259,7 @@ import (
 )
 
 // Wrap the VFS in an io/fs.FS adapter.
-iofs := vfs.NewIOFS(t.VFS(), ctx)
+iofs := vfs.NewIOFS(ctx, t.VFS())
 
 // Serve files at /files/*.
 http.Handle("/files/", http.StripPrefix("/files/", http.FileServer(http.FS(iofs))))

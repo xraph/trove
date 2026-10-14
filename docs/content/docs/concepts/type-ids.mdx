@@ -3,7 +3,7 @@ title: "TypeIDs"
 description: "K-sortable, collision-resistant identifiers with entity-type prefixes for objects, buckets, uploads, and streams."
 ---
 
-Every entity in Trove is identified by a TypeID -- a globally unique, K-sortable, URL-safe identifier that encodes both the entity type and a UUIDv7-based suffix.
+Every entity in Trove is identified by a TypeID, a globally unique, K-sortable, URL-safe identifier that encodes both the entity type and a UUIDv7-based suffix.
 
 ## Format
 
@@ -11,8 +11,8 @@ Every entity in Trove is identified by a TypeID -- a globally unique, K-sortable
 prefix_suffix
 ```
 
-- **prefix** -- Identifies the entity type (e.g., `obj` for objects, `bkt` for buckets)
-- **suffix** -- A UUIDv7-based, base32-encoded identifier
+- prefix: Identifies the entity type (e.g., `obj` for objects, `bkt` for buckets)
+- suffix: A UUIDv7-based, base32-encoded identifier
 
 Example: `obj_01h455vb4pex5vsknk084sn02q`
 
@@ -102,10 +102,10 @@ TypeIDs work transparently with SQL databases and MongoDB via standard Go interf
 The `ID` type implements `database/sql/driver.Valuer` and `database/sql.Scanner`:
 
 ```go
-// Insert -- Value() returns the string representation
+// Insert: Value() returns the string representation
 _, err := db.Exec("INSERT INTO objects (id, key) VALUES ($1, $2)", objID, "file.txt")
 
-// Query -- Scan() reads the string back into an ID
+// Query: Scan() reads the string back into an ID
 var result id.ID
 err := db.QueryRow("SELECT id FROM objects WHERE key = $1", "file.txt").Scan(&result)
 ```
@@ -137,4 +137,4 @@ UUIDv7 provides 48 bits of timestamp and 74 bits of randomness, yielding a negli
 
 ### Self-Describing
 
-The prefix makes IDs self-documenting. When you see `obj_01h455vb4pex5vsknk084sn02q` in a log or database, you immediately know it refers to an object -- not a bucket, stream, or upload session.
+The prefix makes IDs self-documenting. When you see `obj_01h455vb4pex5vsknk084sn02q` in a log or database, you immediately know it refers to an object, not a bucket, stream, or upload session.

@@ -131,7 +131,7 @@ import (
     "github.com/xraph/trove/vfs"
 )
 
-iofs := vfs.NewIOFS(t.VFS(), ctx)
+iofs := vfs.NewIOFS(ctx, t.VFS())
 
 // Serve files over HTTP.
 http.Handle("/files/", http.StripPrefix("/files/", http.FileServer(http.FS(iofs))))

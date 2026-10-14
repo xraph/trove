@@ -1,75 +1,44 @@
 ---
 title: "Checksums"
-description: "Data integrity verification with SHA-256, BLAKE3, and XXHash checksum algorithms."
+description: "Hash algorithms in Trove: the checksum setting, CAS hashes, and what isn't verified yet."
 ---
 
-Trove computes checksums on every write and verifies them on read, ensuring data integrity across storage backends. The checksum algorithm is configurable per Trove instance.
+import { Callout } from "fumadocs-ui/components/callout";
+
+<Callout type="warn">
+Trove doesn't compute or verify checksums on `Put` and `Get` yet. `trove.WithChecksumAlgorithm` stores an algorithm in the config, but nothing reads it, `trove.ErrChecksumMismatch` is declared but never returned, and there's no `X-Trove-Checksum` header. Where hashes are used today is content-addressable storage and the dedup middleware.
+</Callout>
 
 ## Algorithms
 
-Trove supports three hash algorithms, each with different trade-offs:
+Three hash algorithms show up across Trove:
 
-| Algorithm | Constant | Cryptographic | Speed | Use Case |
-|-----------|----------|:------------:|:-----:|----------|
-| SHA-256 | `trove.SHA256` | Yes | Baseline | Default, compliance-friendly |
-| BLAKE3 | `trove.Blake3` | Yes | ~3x faster | High-throughput workloads |
-| XXHash | `trove.XXHash` | No | ~10x faster | Internal dedup, non-security contexts |
+| Algorithm | Checksum constant | CAS constant | Cryptographic |
+|-----------|-------------------|--------------|:-------------:|
+| SHA-256 | `trove.SHA256` | `cas.AlgSHA256` | Yes |
+| BLAKE3 | `trove.Blake3` | `cas.AlgBlake3` | Yes |
+| XXHash | `trove.XXHash` | `cas.AlgXXHash` | No |
 
-SHA-256 is the default. Switch to BLAKE3 for better throughput without sacrificing cryptographic properties, or XXHash when security is not a concern and raw speed matters.
+## The Checksum Setting
 
-## Configuration
-
-Set the algorithm when creating a Trove instance:
+You can set an algorithm when you open a Trove instance, and `DefaultConfig` picks SHA-256:
 
 ```go
 t, err := trove.Open(drv,
     trove.WithChecksumAlgorithm(trove.Blake3),
 )
-```
 
-The default configuration uses SHA-256:
-
-```go
 cfg := trove.DefaultConfig()
 // cfg.ChecksumAlgorithm == trove.SHA256
 ```
 
-## How It Works
+The value is kept in `t.Config()` and has no other effect today. `info.ETag` on a stored object is whatever the driver reports, not a Trove-computed hash.
 
-### Automatic Computation on Put
-
-When `Put` is called, Trove's internal checksum layer reads the data stream, computes the hash, and stores the result alongside the object metadata.
-
-```go
-// Put automatically computes a checksum
-info, err := t.Put(ctx, "data", "report.csv", file)
-// info.ETag contains the computed hash
-```
-
-The Object model stores both the algorithm and the hex-encoded digest:
-
-```go
-type Object struct {
-    // ...
-    ChecksumAlg  string `json:"checksum_alg"`   // e.g., "sha256"
-    ChecksumVal  string `json:"checksum_val"`    // hex-encoded digest
-}
-```
-
-### Verification on Get
-
-When `Get` is called, the stored checksum is verified against the retrieved content. If the data has been corrupted or tampered with, `ErrChecksumMismatch` is returned.
-
-```go
-reader, err := t.Get(ctx, "data", "report.csv")
-if errors.Is(err, trove.ErrChecksumMismatch) {
-    // Data integrity failure -- content does not match stored checksum
-}
-```
+The extension's metadata `Object` model has `ChecksumAlg` and `ChecksumVal` columns for when this lands, but nothing fills them yet.
 
 ## CAS Hash Format
 
-Content-Addressable Storage (CAS) hashes use a prefixed format that encodes both the algorithm and the digest:
+Content-addressable storage names content by a prefixed hash that encodes the algorithm and the digest:
 
 ```
 algorithm:hexdigest
@@ -83,54 +52,26 @@ blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
 xxhash:ef46db3751d8e999
 ```
 
-This format is used in the deduplication middleware and CAS operations to identify content by its hash.
+Pick the CAS algorithm with `trove.WithCAS(cas.AlgBlake3)` or `cas.WithAlgorithm`. See [Content-Addressable Storage](/docs/storage/cas).
 
-## Computing Checksums Directly
+## Verifying Content Yourself
 
-The internal checksum package provides standalone functions for computing and verifying checksums:
+The hashing helpers live in Trove's `internal` package, which code outside the module can't import. To check integrity end to end today, hash the bytes on your side with `crypto/sha256` (or a BLAKE3 library) when you write, keep the digest in the object's metadata with `driver.WithMetadata`, and compare after `Get`:
 
 ```go
-import "github.com/xraph/trove/internal"
+sum := sha256.Sum256(data)
+digest := hex.EncodeToString(sum[:])
 
-// Compute from a reader
-checksum, err := internal.ComputeChecksum(reader, internal.AlgBlake3)
-// checksum.Algorithm == "blake3"
-// checksum.Value     == "af1349b9f5f9..."
+_, err := t.Put(ctx, "data", "report.csv", bytes.NewReader(data),
+    driver.WithMetadata(map[string]string{"sha256": digest}),
+)
 
-// Compute from bytes
-checksum, err := internal.ComputeChecksumBytes(data, internal.AlgSHA256)
-
-// Verify against an expected checksum
-err := internal.VerifyChecksum(reader, expected)
-// Returns an error if the checksums do not match
+obj, err := t.Get(ctx, "data", "report.csv")
+// ... read obj, hash it, and compare with obj.Info.Metadata["sha256"]
 ```
-
-## X-Trove-Checksum Header
-
-When Trove is used as an HTTP API (via the Forge extension), the checksum is exposed in the `X-Trove-Checksum` response header:
-
-```
-HTTP/1.1 200 OK
-Content-Type: application/octet-stream
-X-Trove-Checksum: sha256:e3b0c44298fc1c149afbf4c8996fb924...
-```
-
-Clients can validate the header value against locally computed hashes for end-to-end integrity verification.
-
-## Performance Comparison
-
-Relative throughput benchmarks for computing checksums on a 1 GB file (higher is better):
-
-| Algorithm | Throughput | Relative Speed |
-|-----------|------------|:--------------:|
-| SHA-256 | ~500 MB/s | 1x |
-| BLAKE3 | ~1.5 GB/s | 3x |
-| XXHash | ~5.0 GB/s | 10x |
-
-These numbers are approximate and vary by hardware. BLAKE3 benefits significantly from SIMD instructions on modern CPUs.
 
 ## Choosing an Algorithm
 
-- **SHA-256** -- Best for regulatory compliance (FIPS 180-4), interoperability with AWS S3 ETags, and scenarios requiring widely recognized cryptographic hashes.
-- **BLAKE3** -- Best for high-throughput workloads where cryptographic integrity is needed but SHA-256 is a bottleneck. Recommended for most production deployments.
-- **XXHash** -- Best for internal operations like deduplication indexes and cache keys where collision resistance is sufficient and security is not a concern.
+- SHA-256: widely recognized and FIPS-approved. A sensible default.
+- BLAKE3: faster than SHA-256 on modern CPUs while staying cryptographic.
+- XXHash: very fast but not cryptographic, so only for dedup indexes and cache keys where nobody is trying to forge a collision.

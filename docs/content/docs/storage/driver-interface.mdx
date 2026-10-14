@@ -53,7 +53,7 @@ type ObjectInfo struct {
 
 ### ObjectReader
 
-Returned by `Get` -- wraps content with metadata:
+Returned by `Get`. It wraps the content with metadata:
 
 ```go
 type ObjectReader struct {
@@ -64,7 +64,7 @@ type ObjectReader struct {
 
 ### ObjectIterator
 
-Returned by `List` -- provides cursor-based pagination:
+Returned by `List`. It provides cursor-based pagination:
 
 ```go
 iter, _ := drv.List(ctx, "bucket", driver.WithPrefix("photos/"))
@@ -113,8 +113,8 @@ driver.WithTags(map[string]string{"env": "prod"})
 driver.WithStorageClass("GLACIER")
 
 // Get options
-driver.WithRange(0, 1024)     // byte range
-driver.WithVersionID("v123")  // specific version
+driver.WithRange("bytes=0-1023") // byte range as an HTTP Range value (S3 only today)
+driver.WithVersionID("v123")     // a version ID (only the S3 driver passes it on)
 
 // List options
 driver.WithPrefix("photos/")
@@ -162,7 +162,7 @@ if ok {
 
 ## Capability Interfaces
 
-Drivers can optionally implement extended interfaces for advanced features. Check at runtime with type assertions:
+Drivers can optionally implement extended interfaces for advanced features. Check at runtime with type assertions. The S3, GCS and Azure drivers implement `MultipartDriver`, `PresignDriver` and `RangeDriver`. No built-in driver implements `VersioningDriver`, `NotificationDriver`, `LifecycleDriver` or `ServerCopyDriver` yet:
 
 ### MultipartDriver
 
@@ -285,7 +285,7 @@ func (d *MyDriver) Put(ctx context.Context, bucket, key string, r io.Reader, opt
 
 ## Conformance Test Suite
 
-Every driver **must** pass the conformance test suite to be considered compliant. The `trovetest` package provides `RunDriverSuite`, which tests all required behaviors:
+Every driver should pass the conformance test suite. The `trovetest` package provides `RunDriverSuite`, which tests all required behaviors:
 
 ```go
 package mydriver_test
@@ -312,14 +312,14 @@ The suite covers:
 
 | Category | Tests |
 |----------|-------|
-| **Bucket** | Create, CreateDuplicate, Delete, DeleteNotFound, List |
-| **Put/Get** | PutAndGet, Overwrite, WithMetadata, WithContentType, BucketNotFound, ObjectNotFound, LargeObject (1MB) |
-| **Delete** | Existing, NonExistent |
-| **Head** | Existing, NonExistent |
-| **List** | Empty, Multiple, WithPrefix, Pagination |
-| **Copy** | WithinBucket, AcrossBuckets, SourceNotFound |
-| **Concurrency** | ConcurrentPuts (100 goroutines), ConcurrentReads (100 goroutines) |
-| **Ping** | Connectivity check |
+| Bucket | Create, CreateDuplicate, Delete, DeleteNotFound, List |
+| Put/Get | PutAndGet, Overwrite, WithMetadata, WithContentType, BucketNotFound, ObjectNotFound, LargeObject (1MB) |
+| Delete | Existing, NonExistent |
+| Head | Existing, NonExistent |
+| List | Empty, Multiple, WithPrefix, Pagination |
+| Copy | WithinBucket, AcrossBuckets, SourceNotFound |
+| Concurrency | ConcurrentPuts (20 goroutines), ConcurrentReads (20 goroutines) |
+| Ping | Connectivity check |
 
 ## Test Utilities
 

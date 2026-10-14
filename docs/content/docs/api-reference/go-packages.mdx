@@ -1,21 +1,13 @@
 ---
 title: "Go Packages"
-description: "Complete reference of all Trove Go packages, types, and functions."
+description: "Reference for Trove's Go packages and their exported APIs."
 ---
+
+This page lists the exported API of each package. Signatures come from the code; `go doc` and [pkg.go.dev](https://pkg.go.dev/github.com/xraph/trove) have the full comments.
 
 ## Core Package
 
 **Import:** `github.com/xraph/trove`
-
-### Trove
-
-Root handle for all object storage operations.
-
-```go
-type Trove struct {
-    // contains filtered or unexported fields
-}
-```
 
 ### Constructor
 
@@ -34,6 +26,8 @@ func (t *Trove) List(ctx context.Context, bucket string, opts ...driver.ListOpti
 func (t *Trove) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string, opts ...driver.CopyOption) (*driver.ObjectInfo, error)
 ```
 
+An empty bucket falls back to the default bucket. `Put` and `Get` run the middleware pipeline; `Copy` calls the source driver's `Copy` directly.
+
 ### Bucket Operations
 
 ```go
@@ -45,37 +39,43 @@ func (t *Trove) ListBuckets(ctx context.Context) ([]driver.BucketInfo, error)
 ### Accessors
 
 ```go
-func (t *Trove) Backend(name string) (*Trove, error)
-func (t *Trove) Driver() driver.Driver
+func (t *Trove) Backend(name string) (*Trove, error)    // a Trove pinned to a named backend
+func (t *Trove) Backends() []string
+func (t *Trove) Driver() driver.Driver                  // the primary driver
+func (t *Trove) DriverFor(bucket, key string) driver.Driver
 func (t *Trove) Config() Config
 func (t *Trove) Pool() *stream.Pool
-func (t *Trove) Stream() *stream.Pool
+func (t *Trove) Stream(ctx context.Context, bucket, key string, dir stream.Direction, opts ...stream.Option) (*stream.Stream, error)
 func (t *Trove) Resolver() *middleware.Resolver
-func (t *Trove) CAS() *cas.CAS
-func (t *Trove) VFS() *vfs.FS
+func (t *Trove) CAS() *cas.CAS                          // nil unless WithCAS was used
+func (t *Trove) VFS(bucket ...string) *vfs.FS
 ```
 
 ### Lifecycle and Middleware
 
 ```go
-func (t *Trove) UseMiddleware(mw ...middleware.Middleware)
-func (t *Trove) RemoveMiddleware(name string)
-func (t *Trove) Health(ctx context.Context) error
-func (t *Trove) Close(ctx context.Context) error
+func (t *Trove) UseMiddleware(reg middleware.Registration)
+func (t *Trove) RemoveMiddleware(name string, scope middleware.Scope) // nil scope removes every registration with that name
+func (t *Trove) Health(ctx context.Context) error                     // pings the primary driver
+func (t *Trove) Close(ctx context.Context) error                      // closes the stream pool and every driver
 ```
 
 ### Config
 
 ```go
 type Config struct {
-    DefaultBucket    string
-    ChunkSize        int64
-    PoolSize         int
+    DefaultBucket     string
+    ChunkSize         int64
+    PoolSize          int
     ChecksumAlgorithm ChecksumAlgorithm
-    StreamBufferSize int
-    Retry            RetryPolicy
+    StreamBufferSize  int
+    Retry             RetryPolicy
 }
+
+func DefaultConfig() Config
 ```
+
+`ChecksumAlgorithm` and `Retry` are stored but not applied yet: Trove neither computes checksums nor retries operations today.
 
 ### ChecksumAlgorithm
 
@@ -93,7 +93,7 @@ const (
 
 ```go
 type RetryPolicy struct {
-    Strategy    RetryStrategy // None, Fixed, Exponential
+    Strategy    RetryStrategy // RetryNone, RetryFixed, RetryExponential
     MaxAttempts int
     BaseDelay   time.Duration
     MaxDelay    time.Duration
@@ -104,48 +104,55 @@ type RetryPolicy struct {
 
 | Function | Description |
 |----------|-------------|
-| `WithDefaultBucket(name string)` | Set the default bucket for operations that omit a bucket name |
-| `WithChunkSize(size int64)` | Set the chunk size for streaming uploads |
-| `WithPoolSize(n int)` | Set the maximum number of concurrent streams |
-| `WithChecksumAlgorithm(alg ChecksumAlgorithm)` | Set the hash algorithm for integrity checks |
-| `WithStreamBufferSize(size int)` | Set the internal buffer size for stream channels |
-| `WithRetry(policy RetryPolicy)` | Configure retry behavior for transient failures |
-| `WithBackend(name string, drv driver.Driver)` | Register a named backend for multi-driver routing |
-| `WithRoute(pattern, backend string)` | Route a bucket/key pattern to a named backend |
-| `WithRouteFunc(fn func(bucket, key string) string)` | Dynamic routing function |
+| `WithDefaultBucket(name string)` | Default bucket for calls that pass an empty bucket |
+| `WithChunkSize(size int64)` | Chunk size for streams |
+| `WithPoolSize(n int)` | Maximum concurrent streams in the default pool |
 | `WithPoolConfig(cfg stream.PoolConfig)` | Full pool configuration |
-| `WithVFS(bucket string)` | Enable the virtual filesystem layer on a bucket |
-| `WithMiddleware(mw ...middleware.Middleware)` | Attach read/write middleware globally |
-| `WithReadMiddleware(mw ...middleware.ReadMiddleware)` | Attach read-only middleware |
-| `WithWriteMiddleware(mw ...middleware.WriteMiddleware)` | Attach write-only middleware |
-| `WithScopedMiddleware(scope middleware.Scope, mw middleware.Middleware)` | Attach middleware with a scope filter |
-| `WithMiddlewareAt(priority int, mw middleware.Middleware)` | Attach middleware at a specific priority |
-| `WithCAS(opts ...cas.Option)` | Enable the content-addressable storage layer |
+| `WithStreamBufferSize(size int)` | Buffer size for stream channels |
+| `WithChecksumAlgorithm(alg ChecksumAlgorithm)` | Stored in the config; not applied yet |
+| `WithRetry(policy RetryPolicy)` | Stored in the config; not applied yet |
+| `WithBackend(name string, drv driver.Driver)` | Register a named backend |
+| `WithRoute(pattern, backend string)` | Route keys matching a `filepath.Match` pattern |
+| `WithRouteFunc(fn func(bucket, key string) string)` | Route with a function; `""` falls through |
+| `WithVFS(bucket string)` | Default bucket for `t.VFS()` |
+| `WithMiddleware(mws ...middleware.Middleware)` | Global middleware |
+| `WithReadMiddleware(mws ...middleware.Middleware)` | Global, read path only |
+| `WithWriteMiddleware(mws ...middleware.Middleware)` | Global, write path only |
+| `WithScopedMiddleware(scope middleware.Scope, mws ...middleware.Middleware)` | Middleware limited to a scope |
+| `WithScopedReadMiddleware(scope, mws...)`, `WithScopedWriteMiddleware(scope, mws...)` | Scoped, one direction |
+| `WithMiddlewareAt(priority int, mws ...middleware.Middleware)` | Global middleware at a priority (lower runs first) |
+| `WithCAS(alg cas.HashAlgorithm)` | Turn on content-addressable storage over the primary driver |
 
-### Sentinel Errors
+### Errors
 
 ```go
 var (
-    ErrNotFound         = errors.New("trove: not found")
-    ErrBucketNotFound   = errors.New("trove: bucket not found")
-    ErrBucketExists     = errors.New("trove: bucket already exists")
-    ErrObjectNotFound   = errors.New("trove: object not found")
-    ErrKeyEmpty         = errors.New("trove: key is required")
-    ErrBucketEmpty      = errors.New("trove: bucket name is required")
-    ErrDriverClosed     = errors.New("trove: driver is closed")
-    ErrNilDriver        = errors.New("trove: driver is required")
-    ErrInvalidDSN       = errors.New("trove: invalid DSN")
-    ErrChecksumMismatch = errors.New("trove: checksum mismatch")
-    ErrQuotaExceeded    = errors.New("trove: quota exceeded")
-    ErrContentBlocked   = errors.New("trove: content blocked")
-    ErrStreamClosed     = errors.New("trove: stream is closed")
-    ErrUploadExpired    = errors.New("trove: upload session expired")
-    ErrBackendNotFound  = errors.New("trove: backend not found")
-    ErrPoolClosed       = errors.New("trove: stream pool is closed")
-    ErrStreamNotActive  = errors.New("trove: stream is not active")
-    ErrMaxStreamsReached = errors.New("trove: maximum concurrent streams reached")
+    ErrNotFound          // parent of ErrBucketNotFound and ErrObjectNotFound
+    ErrBucketNotFound
+    ErrBucketExists
+    ErrObjectNotFound
+    ErrPermissionDenied
+    ErrQuotaExceeded     // only when a backend reports a quota or rate limit
+    ErrInvalidPath
+    ErrKeyEmpty
+    ErrBucketEmpty
+    ErrDriverClosed      // declared; no built-in driver returns it yet
+    ErrNilDriver
+    ErrInvalidDSN
+    ErrChecksumMismatch  // declared; nothing returns it yet
+    ErrContentBlocked
+    ErrStreamClosed
+    ErrUploadExpired
+    ErrBackendNotFound
+    ErrPoolClosed
+    ErrStreamNotActive
+    ErrMaxStreamsReached
 )
+
+func Permanent(err error) bool // whether a retry can never succeed
 ```
+
+The not-found, exists, permission, quota and invalid-path errors are the same values as their `driver` counterparts.
 
 ---
 
@@ -154,8 +161,6 @@ var (
 **Import:** `github.com/xraph/trove/driver`
 
 ### Driver Interface
-
-The core contract every storage backend must implement.
 
 ```go
 type Driver interface {
@@ -181,67 +186,73 @@ type Driver interface {
 
 | Type | Description |
 |------|-------------|
-| `ObjectInfo` | Metadata for a stored object (key, size, content type, ETag, last modified, custom metadata) |
-| `ObjectReader` | Wraps `io.ReadCloser` with `ObjectInfo` attached |
-| `BucketInfo` | Bucket name, creation time, and region |
-| `ObjectIterator` | Paginated iterator over object listings with `Next()`, `Value()`, `Err()`, `Close()` |
+| `ObjectInfo` | `Key`, `Size`, `ContentType`, `ETag`, `LastModified`, `Metadata`, `VersionID`, `StorageClass` |
+| `ObjectReader` | An `io.ReadCloser` with an `Info *ObjectInfo` field |
+| `BucketInfo` | `Name`, `CreatedAt` |
+| `ObjectIterator` | `Next(ctx)` (returns `io.EOF` at the end), `All(ctx)`, `NextToken()`, `CommonPrefixes()`, `Close()` |
 
 ### Capability Interfaces
 
-Drivers optionally implement these for advanced features.
-
-| Interface | Methods |
-|-----------|---------|
-| `MultipartDriver` | `InitMultipart`, `UploadPart`, `CompletePart`, `AbortMultipart` |
-| `PresignDriver` | `PresignGet`, `PresignPut` |
-| `VersioningDriver` | `ListVersions`, `GetVersion`, `DeleteVersion` |
-| `NotificationDriver` | `Subscribe`, `Unsubscribe` |
-| `LifecycleDriver` | `SetLifecycleRules`, `GetLifecycleRules` |
-| `RangeDriver` | `GetRange` (byte-range reads) |
-| `ServerCopyDriver` | `ServerCopy` (server-side copy without download) |
+| Interface | Methods | Implemented by |
+|-----------|---------|----------------|
+| `MultipartDriver` | `InitiateMultipart`, `UploadPart`, `CompleteMultipart`, `AbortMultipart` | S3, GCS, Azure |
+| `PresignDriver` | `PresignGet`, `PresignPut` | S3, GCS, Azure |
+| `RangeDriver` | `GetRange(ctx, bucket, key, offset, length)` | S3, GCS, Azure |
+| `VersioningDriver` | `ListVersions`, `GetVersion`, `DeleteVersion`, `RestoreVersion` | none yet |
+| `NotificationDriver` | `Watch(ctx, bucket, opts...)` returning `<-chan ObjectEvent` | none yet |
+| `LifecycleDriver` | `SetLifecycle`, `GetLifecycle` | none yet |
+| `ServerCopyDriver` | `ServerCopy(ctx, src, dst ObjectRef)` | none yet |
 
 ### Supporting Types
 
 | Type | Description |
 |------|-------------|
-| `PartInfo` | Part number, ETag, and size for multipart uploads |
-| `VersionInfo` | Version ID, timestamp, and `IsLatest` flag |
-| `ObjectEvent` | Event payload for notifications |
-| `ObjectEventType` | Constants: `EventPut`, `EventDelete`, `EventCopy` |
-| `LifecycleRule` | Expiration, transition, and filter configuration |
-| `ObjectRef` | Lightweight bucket + key reference |
+| `PartInfo` | `PartNumber`, `ETag`, `Size` |
+| `VersionInfo` | `VersionID`, `Key`, `Size`, `LastModified`, `IsLatest` |
+| `ObjectEvent` | `Type`, `Bucket`, `Key`, `Info` |
+| `ObjectEventType` | `EventCreated`, `EventDeleted`, `EventUpdated` |
+| `LifecycleRule` | `ID`, `Prefix`, `ExpirationDays`, `TransitionDays`, `TransitionStorage`, `Enabled` |
+| `ObjectRef` | `Bucket`, `Key` |
+| `DSNConfig` | `Scheme`, `User`, `Password`, `Host`, `Path`, `Params`, from `ParseDSN(dsn)` |
 
 ### Option Types
 
-Each operation accepts functional options that populate a config struct.
+| Option Type | Config Struct | Fields | Constructors |
+|-------------|---------------|--------|--------------|
+| `PutOption` | `PutConfig` | `ContentType`, `Metadata`, `Tags`, `StorageClass` | `WithContentType`, `WithMetadata`, `WithTags`, `WithStorageClass` |
+| `GetOption` | `GetConfig` | `Range`, `VersionID` | `WithRange(r string)`, `WithVersionID` |
+| `DeleteOption` | `DeleteConfig` | `VersionID` | none |
+| `ListOption` | `ListConfig` | `Prefix`, `Delimiter`, `MaxKeys`, `Cursor` | `WithPrefix`, `WithDelimiter`, `WithMaxKeys`, `WithCursor` |
+| `CopyOption` | `CopyConfig` | `Metadata` | `WithCopyMetadata` |
+| `BucketOption` | `BucketConfig` | `Region` | `WithBucketRegion` |
+| `Option` | `Config` | endpoint, region, path style | `WithEndpoint`, `WithRegion`, `WithForcePathStyle` |
 
-| Option Type | Config Struct | Key Fields |
-|-------------|---------------|------------|
-| `PutOption` | `PutConfig` | `ContentType`, `Metadata`, `CacheControl`, `ContentEncoding` |
-| `GetOption` | `GetConfig` | `VersionID`, `Range` |
-| `DeleteOption` | `DeleteConfig` | `VersionID` |
-| `ListOption` | `ListConfig` | `Prefix`, `Delimiter`, `MaxKeys`, `Cursor` |
-| `CopyOption` | `CopyConfig` | `Metadata`, `ContentType` |
-| `BucketOption` | `BucketConfig` | `Region`, `Tags` |
+### Registry
+
+```go
+func Register(name string, factory Factory)
+func Lookup(name string) (Factory, bool)
+func Drivers() []string
+```
 
 ---
 
 ## Driver Implementations
 
-| Package | Import | Backend | Capabilities |
-|---------|--------|---------|--------------|
-| `localdriver` | `github.com/xraph/trove/drivers/localdriver` | Local filesystem | Core |
-| `memdriver` | `github.com/xraph/trove/drivers/memdriver` | In-memory | Core |
-| `s3driver` | `github.com/xraph/trove/drivers/s3driver` | AWS S3 / MinIO | Core, Multipart, Presign, Range |
-| `gcsdriver` | `github.com/xraph/trove/drivers/gcsdriver` | Google Cloud Storage | Core, Multipart, Presign, Range |
-| `azuredriver` | `github.com/xraph/trove/drivers/azuredriver` | Azure Blob Storage | Core, Multipart, Presign, Range |
-| `sftpdriver` | `github.com/xraph/trove/drivers/sftpdriver` | SFTP | Core |
+| Package | Module | Backend | Schemes | Capabilities |
+|---------|--------|---------|---------|--------------|
+| `drivers/localdriver` | root | Local filesystem | `file`, `local` | Core |
+| `drivers/memdriver` | root | In-memory | `mem` | Core |
+| `drivers/s3driver` | own module | AWS S3, MinIO | `s3` | Core, Multipart, Presign, Range |
+| `drivers/gcsdriver` | own module | Google Cloud Storage | `gcs` | Core, Multipart, Presign, Range |
+| `drivers/azuredriver` | own module | Azure Blob Storage | `azure` | Core, Multipart, Presign, Range |
+| `drivers/sftpdriver` | own module | SFTP | `sftp` | Core |
 
-All drivers share the same constructor pattern:
+Every driver has `New()` and an `Unwrap(t)` that returns the typed driver from a `*trove.Trove` (`memdriver` has `New()` only):
 
 ```go
 drv := s3driver.New()
-err := drv.Open(ctx, "s3://access:secret@us-east-1/my-bucket?endpoint=...")
+err := drv.Open(ctx, "s3://ACCESS_KEY:SECRET@us-east-1/my-bucket?endpoint=http://localhost:9000&path_style=true")
 ```
 
 ---
@@ -256,9 +267,9 @@ err := drv.Open(ctx, "s3://access:secret@us-east-1/my-bucket?endpoint=...")
 type Direction int
 
 const (
-    DirectionRead      Direction = iota // read path only
-    DirectionWrite                      // write path only
-    DirectionReadWrite                  // both paths
+    DirectionRead Direction = 1 << iota
+    DirectionWrite
+    DirectionReadWrite = DirectionRead | DirectionWrite
 )
 ```
 
@@ -268,18 +279,14 @@ const (
 type Middleware interface {
     Name() string
     Direction() Direction
-    ProcessRead(ctx context.Context, bucket, key string, r io.Reader) (io.Reader, error)
-    ProcessWrite(ctx context.Context, bucket, key string, r io.Reader) (io.Reader, error)
 }
 
 type ReadMiddleware interface {
-    Name() string
-    ProcessRead(ctx context.Context, bucket, key string, r io.Reader) (io.Reader, error)
+    WrapReader(ctx context.Context, r io.ReadCloser, info *driver.ObjectInfo) (io.ReadCloser, error)
 }
 
 type WriteMiddleware interface {
-    Name() string
-    ProcessWrite(ctx context.Context, bucket, key string, r io.Reader) (io.Reader, error)
+    WrapWriter(ctx context.Context, w io.WriteCloser, key string) (io.WriteCloser, error)
 }
 ```
 
@@ -288,99 +295,53 @@ type WriteMiddleware interface {
 ```go
 type Registration struct {
     Middleware Middleware
-    Priority   int
-    Scope      Scope
+    Scope      Scope     // nil means ScopeGlobal
+    Direction  Direction // 0 means the middleware's own Direction()
+    Priority   int       // lower runs first; default 0
 }
 ```
 
 ### Scope
 
-Scopes control which operations a middleware applies to.
+Scopes are structs that implement `Scope`. The helper functions build them:
 
-| Constructor | Description |
-|-------------|-------------|
-| `ScopeGlobal()` | Matches all operations |
-| `ScopeBucket(names ...string)` | Matches specific buckets |
-| `ScopeKeyPattern(pattern string)` | Matches keys by glob pattern |
-| `ScopeContentType(types ...string)` | Matches by MIME content type |
-| `ScopeFunc(fn func(bucket, key string) bool)` | Custom predicate |
-| `ScopeAnd(scopes ...Scope)` | Logical AND of scopes |
-| `ScopeOr(scopes ...Scope)` | Logical OR of scopes |
-| `ScopeNot(scope Scope)` | Logical NOT of a scope |
+| Struct | Helper | Matches |
+|--------|--------|---------|
+| `ScopeGlobal{}` | none | Everything |
+| `ScopeBucket{Buckets}` | `ForBuckets(buckets...)` | Named buckets |
+| `ScopeKeyPattern{Patterns}` | `ForKeys(patterns...)` | Keys matching `filepath.Match` patterns |
+| `ScopeContentType{Types}` | `ForContentTypes(types...)` | Intended for MIME types; today it compares the key's extension and doesn't match real content types |
+| `ScopeFunc{Fn, Desc}` | `When(fn)`, `WhenDesc(desc, fn)` | A predicate over `(ctx, bucket, key)` |
+| `ScopeAnd{Scopes}` | `And(scopes...)` | All children |
+| `ScopeOr{Scopes}` | `Or(scopes...)` | Any child |
+| `ScopeNot{Inner}` | `Not(scope)` | The inverse |
 
 ### Resolver
 
 ```go
-type Resolver struct { /* ... */ }
-func (r *Resolver) Add(reg Registration)
-func (r *Resolver) Remove(name string)
-func (r *Resolver) Resolve(direction Direction, bucket, key, contentType string) []Middleware
+func NewResolver() *Resolver
+func (r *Resolver) Register(reg Registration)
+func (r *Resolver) Remove(name string, scope Scope)
+func (r *Resolver) Registrations() []Registration
+func (r *Resolver) ResolveRead(ctx context.Context, bucket, key string) []ReadMiddleware
+func (r *Resolver) ResolveWrite(ctx context.Context, bucket, key string) []WriteMiddleware
 ```
+
+Both resolve methods sort by priority, then registration order, and cache the result per bucket and key.
 
 ---
 
 ## Middleware Implementations
 
-### encrypt
+| Package | Constructor | Options | Direction |
+|---------|-------------|---------|-----------|
+| `middleware/encrypt` | `New(opts...)` | `WithKeyProvider(kp)`; `NewStaticKeyProvider(key)` builds a provider | ReadWrite |
+| `middleware/compress` | `New(opts...)` | `WithMinSize(n)` (default 1024), `WithExclude(exts...)` | ReadWrite |
+| `middleware/dedup` | `New(opts...)` | `WithOnDuplicate(fn)`, `WithStore(s)`, `WithHashAlgorithm(alg)`; `NewMemoryStore()` | Write |
+| `middleware/scan` | `New(opts...)` | `WithProvider(p)`, `WithMaxSize(n)`, `WithSkipExtensions(exts...)`, `WithOnDetect(fn)`; `NewClamAVProvider(addr, opts...)` | Write |
+| `middleware/watermark` | `New(opts...)` | `WithText(s)`, `WithTextFunc(fn)`, `WithTypes(prefixes...)`, `WithSkipTypes(prefixes...)` | Read |
 
-**Import:** `github.com/xraph/trove/middleware/encrypt`
-
-AES-256-GCM encryption middleware.
-
-| Type | Description |
-|------|-------------|
-| `Encrypt` | Middleware that encrypts on write, decrypts on read |
-| `KeyProvider` | Interface for supplying encryption keys |
-| `StaticKeyProvider` | Fixed-key implementation of `KeyProvider` |
-
-### compress
-
-**Import:** `github.com/xraph/trove/middleware/compress`
-
-Zstd compression middleware.
-
-| Type | Description |
-|------|-------------|
-| `Compress` | Middleware that compresses on write, decompresses on read |
-| `Option` | Functional option type |
-| `WithMinSize(bytes int64)` | Skip compression for objects smaller than threshold |
-| `WithExclude(patterns ...string)` | Skip compression for matching content types |
-
-### dedup
-
-**Import:** `github.com/xraph/trove/middleware/dedup`
-
-Content-hash deduplication middleware.
-
-| Type | Description |
-|------|-------------|
-| `Dedup` | Middleware that detects and eliminates duplicate content |
-| `Store` | Interface for the dedup index backend |
-| `MemoryStore` | In-memory implementation of `Store` |
-
-### scan
-
-**Import:** `github.com/xraph/trove/middleware/scan`
-
-Content scanning middleware (antivirus / malware detection).
-
-| Type | Description |
-|------|-------------|
-| `Scan` | Write middleware that scans content before storage |
-| `Provider` | Interface for scan backends (e.g., ClamAV) |
-| `Result` | Scan outcome: clean, infected, or error |
-| `OnDetectFunc` | Callback invoked when a threat is detected |
-
-### watermark
-
-**Import:** `github.com/xraph/trove/middleware/watermark`
-
-Invisible watermark injection for images.
-
-| Type | Description |
-|------|-------------|
-| `Watermark` | Read middleware that injects invisible watermarks into PNG/JPEG |
-| `TextFunc` | `func(bucket, key string) string` -- generates watermark text per object |
+`encrypt.KeyProvider` is `Key(ctx) ([]byte, error)`. `scan.Provider` is `Scan(ctx, r) (*scan.Result, error)`, and `scan.Result` has `Clean`, `Threat` and `Details`.
 
 ---
 
@@ -388,143 +349,92 @@ Invisible watermark injection for images.
 
 **Import:** `github.com/xraph/trove/stream`
 
+A stream carries chunks between a producer and a consumer. It doesn't read from or write to a driver by itself.
+
 ### Pool
 
 ```go
-type Pool struct { /* ... */ }
-func NewPool(cfg PoolConfig) *Pool
-func (p *Pool) Open(ctx context.Context, bucket, key string, dir Direction, opts ...StreamOption) (*Stream, error)
-func (p *Pool) Metrics() PoolMetrics
+func NewPool(name string, cfg PoolConfig) *Pool
+func (p *Pool) Acquire(ctx context.Context, dir Direction, bucket, key string, opts ...Option) (*Stream, error) // blocks for a slot
+func (p *Pool) Release(s *Stream)
+func (p *Pool) Get(streamID id.ID) *Stream
+func (p *Pool) Range(fn func(s *Stream) bool)
+func (p *Pool) ActiveCount() int
+func (p *Pool) ChunkPool() *ChunkPool
 func (p *Pool) Close() error
 ```
+
+`Pool` also has exported `ID`, `Name`, `Config` and `Metrics *PoolMetrics` fields. `p.Metrics.Snapshot()` returns `ActiveStreams`, `TotalBytes`, `TotalChunks`, `FailedStreams`, `RetryCount`, `AvgThroughput` and `P99Latency`.
 
 ### PoolConfig
 
 ```go
 type PoolConfig struct {
-    MaxStreams      int
-    ChunkSize      int64
-    BufferSize     int
-    IdleTimeout    time.Duration
+    MaxStreams       int
+    MaxBandwidth     int64
+    ChunkSize        int64
+    BufferCount      int
+    StreamTimeout    time.Duration
+    IdleTimeout      time.Duration
+    BackpressureMode Backpressure
 }
-```
 
-### PoolMetrics
-
-```go
-type PoolMetrics struct {
-    ActiveStreams   int
-    TotalOpened    int64
-    TotalClosed    int64
-    BytesUploaded  int64
-    BytesDownloaded int64
-}
+func DefaultPoolConfig() PoolConfig
 ```
 
 ### Stream
 
 ```go
-type Stream struct { /* ... */ }
-func (s *Stream) Write(data []byte) (int, error)
-func (s *Stream) Read(buf []byte) (int, error)
-func (s *Stream) Pause() error
-func (s *Stream) Resume() error
-func (s *Stream) Cancel() error
-func (s *Stream) Complete() error
+func (s *Stream) Start() error
+func (s *Stream) Write(chunk *Chunk) error
+func (s *Stream) Read(ctx context.Context) (*Chunk, error) // io.EOF after Complete
+func (s *Stream) Ack(ack ChunkAck)
+func (s *Stream) ReadAck(ctx context.Context) (ChunkAck, error)
+func (s *Stream) Complete(info *driver.ObjectInfo) error
+func (s *Stream) Fail(err error)
+func (s *Stream) Close()
+func (s *Stream) Control(msg ControlMsg) error
+func (s *Stream) ControlChan() <-chan ControlMsg
 func (s *Stream) State() State
-func (s *Stream) ID() id.ID
+func (s *Stream) Err() error
+func (s *Stream) Done() <-chan struct{}
+func (s *Stream) Offset() int64
+func (s *Stream) SetTotalSize(n int64)
+func (s *Stream) TotalSize() int64
+func (s *Stream) Resumable() bool
+func (s *Stream) ChunkPool() *ChunkPool
+func (s *Stream) Metrics() *Metrics
+func (s *Stream) BackpressureMode() Backpressure
 ```
 
-### Direction
+### Enums
 
-```go
-type Direction int
-
-const (
-    Upload   Direction = iota
-    Download
-    BiDi
-)
-```
-
-### State
-
-```go
-type State int
-
-const (
-    Idle       State = iota
-    Active
-    Paused
-    Completing
-    Completed
-    Failed
-    Cancelled
-)
-```
+| Type | Values |
+|------|--------|
+| `Direction` | `DirectionUpload`, `DirectionDownload`, `DirectionBiDi` |
+| `State` | `StateIdle`, `StateActive`, `StatePaused`, `StateCompleting`, `StateCompleted`, `StateFailed`, `StateCancelled` |
+| `ControlType` | `CtrlPause`, `CtrlResume`, `CtrlCancel`, `CtrlSeek` |
+| `Backpressure` | `BackpressureBlock` (default), `BackpressureDrop`, `BackpressureBuffer`, `BackpressureAdaptive` |
 
 ### Chunk Types
 
-```go
-type Chunk struct {
-    Index    int
-    Data     []byte
-    Checksum string
-}
-
-type ChunkAck struct {
-    Index int
-    OK    bool
-    Err   error
-}
-
-type ChunkPool struct { /* ... */ }
-func (cp *ChunkPool) Get() *Chunk
-func (cp *ChunkPool) Put(c *Chunk)
-func (cp *ChunkPool) Stats() ChunkPoolStats
-
-type ChunkPoolStats struct {
-    Gets    int64
-    Puts    int64
-    Misses  int64
-}
-```
-
-### Backpressure Modes
-
-```go
-type Backpressure int
-
-const (
-    Block    Backpressure = iota // block the writer until the reader catches up
-    Drop                        // drop chunks when the buffer is full
-    Buffer                      // buffer chunks in memory without limit
-    Adaptive                    // switch between block and buffer based on memory pressure
-)
-```
-
-### Hooks
-
-```go
-type ProgressHook func(bytesSent, totalBytes int64)
-type ChunkHook    func(chunk Chunk)
-type CompleteHook func(info driver.ObjectInfo)
-type ErrorHook    func(err error)
-```
+| Type | Fields |
+|------|--------|
+| `Chunk` | `Index`, `Offset`, `Data`, `Size`, `Checksum`, `Final` |
+| `ChunkAck` | Acknowledgement for a chunk |
+| `ChunkPool` | `NewChunkPool(size)`, `Get()`, `Put(buf)`, `Stats()`, `ChunkSize()` |
+| `Progress` | `StreamID`, `BytesSent`, `BytesRecv`, `TotalSize`, `Percent`, `Speed` |
 
 ### Stream Options
 
-| Function | Description |
-|----------|-------------|
-| `WithChunkSize(size int64)` | Override the pool default chunk size |
-| `WithResumable(enabled bool)` | Enable resumable uploads |
-| `WithPool(pool *Pool)` | Use a specific pool instance |
-| `WithChannelSize(size int)` | Set the internal channel buffer |
-| `WithBackpressure(mode Backpressure)` | Set the backpressure strategy |
-| `WithOnProgress(hook ProgressHook)` | Register a progress callback |
-| `WithOnChunk(hook ChunkHook)` | Register a per-chunk callback |
-| `WithOnComplete(hook CompleteHook)` | Register a completion callback |
-| `WithOnError(hook ErrorHook)` | Register an error callback |
+| Option | Description |
+|--------|-------------|
+| `WithChunkSize(n)` | Chunk size in bytes |
+| `WithChannelSize(n)` | Chunk channel capacity |
+| `WithBackpressure(mode)` | Backpressure strategy |
+| `WithResumable()` | Mark the stream resumable |
+| `WithPool(name)` | Name the pool |
+| `WithOnProgress(fn)`, `WithOnChunk(fn)`, `WithOnComplete(fn)`, `WithOnError(fn)` | Lifecycle hooks |
 
 ---
 
@@ -532,59 +442,29 @@ type ErrorHook    func(err error)
 
 **Import:** `github.com/xraph/trove/cas`
 
-Content-addressable storage layer built on top of Trove.
-
-### CAS
-
 ```go
-type CAS struct { /* ... */ }
-func (c *CAS) Store(ctx context.Context, r io.Reader) (hash string, err error)
-func (c *CAS) Retrieve(ctx context.Context, hash string) (io.ReadCloser, error)
+func New(store driver.Driver, opts ...Option) *CAS
+func (c *CAS) Store(ctx context.Context, r io.Reader) (string, *driver.ObjectInfo, error)
+func (c *CAS) Retrieve(ctx context.Context, hash string) (*driver.ObjectReader, error)
 func (c *CAS) Exists(ctx context.Context, hash string) (bool, error)
+func (c *CAS) Stat(ctx context.Context, hash string) (*Entry, error)
 func (c *CAS) Pin(ctx context.Context, hash string) error
 func (c *CAS) Unpin(ctx context.Context, hash string) error
 func (c *CAS) GC(ctx context.Context) (*GCResult, error)
+func (c *CAS) Algorithm() HashAlgorithm
+func (c *CAS) Bucket() string // "cas" by default
 ```
 
-### HashAlgorithm
+| Item | Details |
+|------|---------|
+| `HashAlgorithm` | `AlgSHA256`, `AlgBlake3`, `AlgXXHash`. Hashes are formatted `algorithm:hex` |
+| `Entry` | `Hash`, `Bucket`, `Key`, `Size`, `RefCount`, `Pinned` |
+| `GCResult` | `Scanned`, `Deleted`, `FreedBytes`, `Errors` |
+| `Index` | `Get`, `Put`, `Delete`, `IncrementRef`, `DecrementRef`, `Pin`, `Unpin`, `ListUnpinned` |
+| `MemoryIndex` | The default index, from `NewMemoryIndex()` |
+| Options | `WithAlgorithm(alg)`, `WithBucket(name)`, `WithIndex(idx)` |
 
-```go
-type HashAlgorithm int
-
-const (
-    AlgSHA256 HashAlgorithm = iota
-    AlgBlake3
-    AlgXXHash
-)
-```
-
-### GCResult
-
-```go
-type GCResult struct {
-    Removed   int
-    Reclaimed int64 // bytes freed
-}
-```
-
-### Index Interface
-
-```go
-type Index interface {
-    AddRef(ctx context.Context, hash string) error
-    RemoveRef(ctx context.Context, hash string) error
-    RefCount(ctx context.Context, hash string) (int, error)
-    IsPinned(ctx context.Context, hash string) (bool, error)
-}
-```
-
-### CAS Options
-
-| Function | Description |
-|----------|-------------|
-| `WithAlgorithm(alg HashAlgorithm)` | Set the hash algorithm |
-| `WithIndex(idx Index)` | Provide a custom reference-counting index |
-| `WithBucket(name string)` | Set the bucket used for CAS storage |
+Nothing in Trove calls `DecrementRef`, so `GC` has nothing to collect unless you lower counts yourself.
 
 ---
 
@@ -592,34 +472,30 @@ type Index interface {
 
 **Import:** `github.com/xraph/trove/vfs`
 
-Virtual filesystem layer that presents Trove objects as a file tree compatible with `io/fs`.
-
-### FS
-
 ```go
-type FS struct { /* ... */ }
-func New(store *trove.Trove, bucket string) *FS
+func New(store Storage, bucket string) *FS
+func NewIOFS(ctx context.Context, vfs *FS) *IOFS // an io/fs.FS
 
-func (f *FS) Stat(name string) (FileInfo, error)
-func (f *FS) ReadDir(name string) ([]DirEntry, error)
-func (f *FS) Walk(root string, fn WalkFunc) error
-func (f *FS) Open(name string) (io.ReadCloser, error)
-func (f *FS) Create(name string, r io.Reader) error
-func (f *FS) Mkdir(name string) error
-func (f *FS) Remove(name string) error
-func (f *FS) RemoveAll(name string) error
-func (f *FS) Rename(oldName, newName string) error
-func (f *FS) SetMetadata(name string, meta map[string]string) error
-func (f *FS) GetMetadata(name string) (map[string]string, error)
+func (f *FS) Stat(ctx context.Context, name string) (*FileInfo, error)
+func (f *FS) ReadDir(ctx context.Context, name string) ([]DirEntry, error)
+func (f *FS) Walk(ctx context.Context, root string, fn WalkFunc) error
+func (f *FS) Open(ctx context.Context, name string) (*File, error)
+func (f *FS) Create(ctx context.Context, name string) (*File, error)
+func (f *FS) Mkdir(ctx context.Context, name string) error
+func (f *FS) Remove(ctx context.Context, name string) error
+func (f *FS) RemoveAll(ctx context.Context, name string) error
+func (f *FS) Rename(ctx context.Context, oldName, newName string) error
+func (f *FS) SetMetadata(ctx context.Context, name string, meta map[string]string) error
+func (f *FS) GetMetadata(ctx context.Context, name string) (map[string]string, error)
 ```
-
-### Types
 
 | Type | Description |
 |------|-------------|
-| `FileInfo` | Implements `fs.FileInfo` -- name, size, mode, mod time, is-dir |
-| `DirEntry` | Implements `fs.DirEntry` -- name, is-dir, type, info |
-| `WalkFunc` | `func(path string, info FileInfo, err error) error` |
+| `Storage` | The subset of `*trove.Trove` the VFS needs (`Put`, `Get`, `Delete`, `Head`, `List`, `Copy`) |
+| `File` | `Read`, `Write`, `Close` (flushes writes), `Stat`, `Name` |
+| `FileInfo` | Implements `fs.FileInfo` |
+| `DirEntry` | Implements `fs.DirEntry` |
+| `WalkFunc` | `func(path string, info *FileInfo, err error) error`; return `fs.SkipDir` or `fs.SkipAll` to prune |
 
 ---
 
@@ -627,31 +503,18 @@ func (f *FS) GetMetadata(name string) (map[string]string, error)
 
 **Import:** `github.com/xraph/trove/id`
 
-TypeID-based identifiers with prefixes for every Trove resource.
+| Prefix | Constant | Constructor |
+|--------|----------|-------------|
+| `obj` | `PrefixObject` | `NewObjectID()` |
+| `bkt` | `PrefixBucket` | `NewBucketID()` |
+| `upl` | `PrefixUploadSession` | `NewUploadSessionID()` |
+| `dwn` | `PrefixDownloadSession` | `NewDownloadSessionID()` |
+| `str` | `PrefixStream` | `NewStreamID()` |
+| `pol` | `PrefixPool` | `NewPoolID()` |
+| `ver` | `PrefixVersion` | `NewVersionID()` |
+| `chk` | `PrefixChunk` | `NewChunkID()` |
 
-### Prefix Constants
-
-| Constant | Prefix | Example |
-|----------|--------|---------|
-| `PrefixObject` | `obj_` | `obj_2bNx8rK4wMQp0` |
-| `PrefixBucket` | `bkt_` | `bkt_7mHj3nL9xRqYs` |
-| `PrefixUploadSession` | `upl_` | `upl_4kWv6tP1zNcFd` |
-| `PrefixDownloadSession` | `dwn_` | `dwn_9aGx5sJ2yBhTm` |
-| `PrefixStream` | `str_` | `str_1cLw8qR6vEpXn` |
-| `PrefixPool` | `pol_` | `pol_3fMy7uT0wDkZr` |
-| `PrefixVersion` | `ver_` | `ver_6jNx2pK5xAeSt` |
-| `PrefixChunk` | `chk_` | `chk_8hBv4rL3zCoWm` |
-
-### ID Type
-
-```go
-type ID struct { /* ... */ }
-func New(prefix string) ID
-func Parse(s string) (ID, error)
-func (id ID) String() string
-func (id ID) Prefix() string
-func (id ID) IsZero() bool
-```
+`New(prefix)`, `Parse`, `ParseAny`, `ParseWithPrefix`, `MustParse`, `MustParseWithPrefix` and a `Parse<Type>ID` for each prefix. `ID` has `String`, `Prefix`, `IsNil`, text, SQL and BSON marshaling, and `id.Nil` is the zero value.
 
 ---
 
@@ -659,63 +522,40 @@ func (id ID) IsZero() bool
 
 **Import:** `github.com/xraph/trove/trovetest`
 
-Conformance test suite and testing utilities.
-
 ```go
-// RunDriverSuite runs the full conformance suite against a driver implementation.
-func RunDriverSuite(t *testing.T, drv driver.Driver)
+func RunDriverSuite(t *testing.T, factory func(t *testing.T) driver.Driver)
+func TestObject(key string, data []byte) (string, io.Reader)
+func RandomData(size int) []byte
+func ReadAll(t *testing.T, reader *driver.ObjectReader) []byte
+func AssertObjectEquals(t *testing.T, expected, actual *driver.ObjectInfo)
 ```
 
-### Helpers
-
-| Function | Description |
-|----------|-------------|
-| `TestObject(key, content string)` | Create a test object with the given key and body |
-| `RandomData(size int)` | Generate random byte content |
-| `AssertObjectEquals(t, expected, actual *driver.ObjectInfo)` | Assert two object infos are equal |
-| `ReadAll(r *driver.ObjectReader) ([]byte, error)` | Read an entire object reader into bytes |
-
-### MockDriver
-
-```go
-type MockDriver struct {
-    PutFunc    func(ctx context.Context, bucket, key string, r io.Reader, opts ...driver.PutOption) (*driver.ObjectInfo, error)
-    GetFunc    func(ctx context.Context, bucket, key string, opts ...driver.GetOption) (*driver.ObjectReader, error)
-    DeleteFunc func(ctx context.Context, bucket, key string, opts ...driver.DeleteOption) error
-    // ... all Driver interface methods
-}
-```
+`MockDriver` has one function field per `Driver` method (`NameFunc`, `OpenFunc`, `PutFunc` and so on).
 
 ---
 
 ## Extension Package
 
-**Import:** `github.com/xraph/trove/extension`
-
-Forge extension that integrates Trove into the Forge application framework with HTTP handlers, database-backed metadata, and lifecycle management.
-
-### Constructor
+**Import:** `github.com/xraph/trove/extension` (its own module)
 
 ```go
-func New(opts ...ExtOption) forge.Extension
+func New(opts ...ExtOption) *Extension
+
+func (e *Extension) Trove() *trove.Trove
+func (e *Extension) Store() store.Store
+func (e *Extension) Manager() *TroveManager // nil in single-store mode
 ```
 
-### Config
+| Option | Description |
+|--------|-------------|
+| `WithConfig(cfg Config)` | Set the whole configuration |
+| `WithGroveDatabase(name string)` | Named Grove database for metadata |
+| `WithStore(s store.Store)` | Your own metadata store |
+| `WithDisableMigrate()` | Skip the metadata migrations |
+| `WithTroveOption(opt trove.Option)` | A `trove.Option` for every instance |
+| `WithTroveOptionFor(store string, opt trove.Option)` | A `trove.Option` for one named store |
+| `WithFileStore(name, drv)`, `WithFileStoreDSN(name, dsn)` | Add a named store |
+| `WithDefaultFileStore(name string)` | Pick the default store |
+| `WithBasePath(path string)`, `WithDisableRoutes()` | Set fields nothing reads yet (no REST routes are mounted) |
 
-```go
-type Config struct {
-    BasePath        string
-    DisableRoutes   bool
-    DisableMigrate  bool
-}
-```
-
-### ExtOption Functions
-
-| Function | Description |
-|----------|-------------|
-| `WithBasePath(path string)` | Set the URL base path for HTTP routes (default: `/storage`) |
-| `WithConfig(cfg Config)` | Provide a full configuration struct |
-| `WithDisableRoutes(disabled bool)` | Disable automatic HTTP route registration |
-| `WithDisableMigrate(disabled bool)` | Disable automatic database migration |
-| `WithGroveDatabase(name string)` | Set the Grove database name for metadata storage |
+See the [Forge extension guide](/docs/integration/forge-extension) for `Config` and its YAML keys.

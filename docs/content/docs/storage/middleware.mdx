@@ -37,16 +37,18 @@ defer t.Close(ctx)
 Every `Put()` and `Get()` call passes data through a resolved middleware pipeline:
 
 ```
-Put:  data --> compress.WrapWriter --> encrypt.WrapWriter --> driver.Put
-Get:  driver.Get --> encrypt.WrapReader --> compress.WrapReader --> data
+Put:  data -> first.WrapWriter -> second.WrapWriter -> driver.Put
+Get:  driver.Get -> first.WrapReader -> second.WrapReader -> data
 ```
 
-The pipeline is assembled per-operation by the **Resolver**, which:
+Both paths apply the middleware in the same priority order. The read path isn't reversed, so two middleware that both transform bytes (compress and encrypt) don't round-trip: with compress first, `Get` returns compressed bytes. Don't put both on the same keys for now.
 
-1. Filters middleware by **direction** (read, write, or both)
-2. Filters middleware by **scope** (bucket, key pattern, content type, or custom predicate)
-3. Sorts by **priority** (lower number runs first, default 100)
-4. Caches the result for repeated lookups (LRU, capacity 1024)
+The pipeline is assembled per operation by the `Resolver`, which:
+
+1. Filters middleware by direction (read, write or both)
+2. Filters middleware by scope (bucket, key pattern, content type or a custom predicate)
+3. Sorts by priority (lower runs first; the default is 0)
+4. Caches the result for repeated lookups (LRU, 1024 entries)
 
 ## Direction
 
@@ -62,13 +64,13 @@ const (
 )
 ```
 
-- **ReadWrite** middleware (encrypt, compress) transforms both paths
-- **Write-only** middleware (dedup) only runs on uploads
-- **Read-only** middleware could post-process downloads (e.g., watermarking)
+- ReadWrite middleware (encrypt, compress) transforms both paths
+- Write-only middleware (dedup, scan) only runs on uploads
+- Read-only middleware (watermark) post-processes downloads
 
 ## Scopes
 
-Scopes control _when_ middleware activates. The built-in scopes cover common cases:
+Scopes control when middleware activates. Each scope is a struct (`ScopeBucket`, `ScopeKeyPattern`, `ScopeContentType`, `ScopeFunc`, `ScopeAnd`, `ScopeOr`, `ScopeNot`, `ScopeGlobal`), and the helper functions below build them for you:
 
 ```go
 // Match specific buckets.
@@ -77,8 +79,8 @@ middleware.ForBuckets("media", "documents")
 // Match object keys by glob pattern.
 middleware.ForKeys("*.log", "reports/*.csv")
 
-// Match by content type prefix.
-middleware.ForContentTypes("image/", "video/")
+// Meant to match by content type, but see the note below.
+middleware.ForContentTypes("image/*", "video/*")
 
 // Custom predicate for any runtime condition.
 middleware.When(func(ctx context.Context, bucket, key string) bool {
@@ -92,21 +94,26 @@ middleware.And(
 )
 middleware.Or(scope1, scope2)
 middleware.Not(middleware.ForBuckets("public"))
+
+// The same thing as a struct literal.
+&middleware.ScopeBucket{Buckets: []string{"media", "documents"}}
 ```
+
+`ScopeContentType` doesn't look at content types yet. It only considers entries ending in `/*`, and compares the key's file extension with the part before the slash, so `image/*` matches a key like `cat.imagefile` and never `cat.jpg`. Until that's fixed, scope by key pattern (`ForKeys("*.jpg", "*.png")`) instead.
 
 ## Registration Options
 
 Register middleware at different levels:
 
 ```go
-// Global — applies to all operations.
+// Global: applies to all operations.
 trove.WithMiddleware(mw)
 
 // Read-only or write-only.
 trove.WithReadMiddleware(mw)
 trove.WithWriteMiddleware(mw)
 
-// Scoped — only activates when scope matches.
+// Scoped: only activates when the scope matches.
 trove.WithScopedMiddleware(scope, mw)
 trove.WithScopedReadMiddleware(scope, mw)
 trove.WithScopedWriteMiddleware(scope, mw)
@@ -127,7 +134,8 @@ t.UseMiddleware(middleware.Registration{
     Priority:  50,
 })
 
-t.RemoveMiddleware("my-middleware-name")
+// Remove by name and scope. A nil scope removes every registration with that name.
+t.RemoveMiddleware("my-middleware-name", nil)
 ```
 
 ## Built-in Middleware
@@ -142,9 +150,9 @@ enc := encrypt.New(
 )
 ```
 
-- **Format**: `[4-byte nonce length][nonce][ciphertext + GCM tag]`
-- **Direction**: ReadWrite
-- **Key rotation**: Implement the `KeyProvider` interface for Vault-backed keys
+- Format: `[4-byte nonce length][nonce][ciphertext + GCM tag]`
+- Direction: ReadWrite
+- Keys: implement the `KeyProvider` interface to fetch the key from a secrets store (the extension's `hooks.NewVaultHook` has one for Vault)
 
 ```go
 type KeyProvider interface {
@@ -163,9 +171,9 @@ comp := compress.New(
 )
 ```
 
-- **Auto-detect**: Reads check for zstd magic bytes, passing through uncompressed data transparently
-- **Skip list**: jpg, png, gif, webp, mp4, mp3, zip, gz, bz2, xz, zst, br, rar, 7z
-- **Size guard**: If compressed output is larger than input, original data is kept
+- Auto-detect: reads check for the zstd magic bytes and pass uncompressed data through unchanged
+- Skip list: already-compressed formats such as jpg, png, gif, webp, mp4, mp3, zip, gz, bz2, xz, zst, br, rar and 7z
+- Size guard: if the compressed output isn't smaller than the input, the original data is kept
 
 ### Deduplication (`middleware/dedup`)
 
@@ -179,13 +187,14 @@ dup := dedup.New(
 )
 ```
 
-- **Direction**: Write-only
-- **Detection only**: Reports duplicates via callback; data still flows through. Pair with CAS for actual storage dedup.
-- **Hash algorithm**: Uses BLAKE3 by default, configurable via `WithHashAlgorithm()`
+- Direction: Write-only
+- Detection only: it reports duplicates through the callback and the data still flows through. Pair it with CAS for real storage dedup.
+- Hash algorithm: BLAKE3 by default. `WithHashAlgorithm()` takes a type from Trove's `internal` package, so code outside the module can't name its constants today.
+- Store: an in-memory store unless you pass `dedup.WithStore(...)`
 
 ### Content Scanning (`middleware/scan`)
 
-Write-only middleware that scans uploaded content for threats using a pluggable `ScanProvider` interface. Blocks malicious uploads before they reach storage.
+Write-only middleware that scans uploaded content through a pluggable `scan.Provider`. It blocks a flagged upload before it reaches storage.
 
 ```go
 import "github.com/xraph/trove/middleware/scan"
@@ -194,27 +203,33 @@ scanner := scan.New(
     scan.WithProvider(scan.NewClamAVProvider("tcp://localhost:3310")),
     scan.WithMaxSize(25 << 20),              // skip files > 25MB
     scan.WithSkipExtensions(".log", ".tmp"),  // skip known safe extensions
-    scan.WithOnDetect(func(ctx context.Context, key string, result *scan.ScanResult) {
+    scan.WithOnDetect(func(ctx context.Context, key string, result *scan.Result) {
         log.Printf("threat detected in %s: %s", key, result.Threat)
     }),
 )
 ```
 
-- **Direction**: Write-only
-- **Blocking**: Returns `trove.ErrContentBlocked` when a threat is detected
-- **Buffered**: Content is buffered in memory, scanned on `Close()`, then flushed to the underlying writer only if clean
-- **ClamAV provider**: Built-in provider implementing the ClamAV INSTREAM protocol over TCP
-- **Custom providers**: Implement `scan.ScanProvider` for other scanning backends
+- Direction: Write-only
+- Blocking: returns `trove.ErrContentBlocked` when a threat is detected
+- Buffered: content is held in memory, scanned on `Close()`, and written to the underlying writer only if clean
+- ClamAV: `scan.NewClamAVProvider(addr)` speaks clamd's INSTREAM protocol over TCP
+- Custom providers: implement `scan.Provider` for another scanner
 
 ```go
-type ScanProvider interface {
-    Scan(ctx context.Context, r io.Reader) (*ScanResult, error)
+type Provider interface {
+    Scan(ctx context.Context, r io.Reader) (*Result, error)
+}
+
+type Result struct {
+    Clean   bool
+    Threat  string
+    Details string
 }
 ```
 
 ### Watermark (`middleware/watermark`)
 
-Read-only middleware that embeds invisible watermark metadata in downloaded images. Operates at the byte level without image decoding.
+Read-only middleware that writes a text mark into file metadata on download. It works at the byte level, without decoding images.
 
 ```go
 import "github.com/xraph/trove/middleware/watermark"
@@ -232,10 +247,10 @@ wm := watermark.New(
 )
 ```
 
-- **Direction**: Read-only
-- **Supported formats**: PNG (tEXt chunk injection), JPEG (COM marker injection)
-- **Passthrough**: Non-matching content types are passed through unmodified
-- **Zero dependencies**: Uses byte-level manipulation, no image processing libraries
+- Direction: Read-only
+- Formats: PNG (a `tEXt` chunk), JPEG (a `COM` marker) and the PDF info dictionary. `WithTypes` defaults to `image/png` and `image/jpeg`
+- Passthrough: other content types pass through unchanged
+- No dependencies: byte-level edits, no image libraries
 
 ## Writing Custom Middleware
 

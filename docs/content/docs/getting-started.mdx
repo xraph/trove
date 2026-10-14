@@ -8,28 +8,33 @@ import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 
 ## Installation
 
-Install the core Trove package:
+You need Go 1.25 or later. The local disk and in-memory drivers live in the root module, so one `go get` covers them:
 
 ```bash
-go get github.com/xraph/trove
+go get github.com/xraph/trove@latest
 ```
 
-Then install one or more storage drivers:
+The cloud and SFTP drivers are separate modules. Add the ones you use:
 
-<Tabs items={["Local Filesystem", "In-Memory (Testing)", "AWS S3 / MinIO"]}>
-<Tab value="Local Filesystem">
-```bash
-go get github.com/xraph/trove/drivers/localdriver
-```
-</Tab>
-<Tab value="In-Memory (Testing)">
-```bash
-go get github.com/xraph/trove/drivers/memdriver
-```
-</Tab>
+<Tabs items={["AWS S3 / MinIO", "Google Cloud Storage", "Azure Blob", "SFTP"]}>
 <Tab value="AWS S3 / MinIO">
 ```bash
-go get github.com/xraph/trove/drivers/s3driver
+go get github.com/xraph/trove/drivers/s3driver@latest
+```
+</Tab>
+<Tab value="Google Cloud Storage">
+```bash
+go get github.com/xraph/trove/drivers/gcsdriver@latest
+```
+</Tab>
+<Tab value="Azure Blob">
+```bash
+go get github.com/xraph/trove/drivers/azuredriver@latest
+```
+</Tab>
+<Tab value="SFTP">
+```bash
+go get github.com/xraph/trove/drivers/sftpdriver@latest
 ```
 </Tab>
 </Tabs>
@@ -54,7 +59,7 @@ The local driver stores objects as files on disk. Buckets map to subdirectories 
 import "github.com/xraph/trove/drivers/memdriver"
 
 drv := memdriver.New()
-// No Open() call required -- memdriver is ready immediately.
+// Open is a no-op for memdriver, so you can skip it.
 ```
 
 The memory driver stores all data in-process using Go maps. It is not persistent and is intended for unit tests and development.
@@ -238,8 +243,8 @@ The `ObjectInfo` struct contains:
 | `ETag` | `string` | Entity tag for conditional requests |
 | `LastModified` | `time.Time` | Last modification timestamp |
 | `Metadata` | `map[string]string` | User-defined metadata |
-| `VersionID` | `string` | Version identifier (if versioning enabled) |
-| `StorageClass` | `string` | Storage tier (e.g. `"STANDARD"`, `"GLACIER"`) |
+| `VersionID` | `string` | Version identifier. No built-in driver sets it yet |
+| `StorageClass` | `string` | Storage tier, where the backend reports one |
 
 ## Copy an Object
 
@@ -267,7 +272,7 @@ primary := localdriver.New()
 primary.Open(ctx, "file:///var/data/hot")
 
 archive := s3driver.New()
-archive.Open(ctx, "s3://my-archive-bucket?region=us-east-1")
+archive.Open(ctx, "s3://us-east-1/my-archive-bucket")
 
 t, err := trove.Open(primary,
     // Register a named backend.
@@ -287,14 +292,14 @@ t, err := trove.Open(primary,
 )
 ```
 
-Route resolution priority:
-1. Route functions (highest)
-2. Pattern routes
-3. Default driver (fallback)
+Route resolution order:
+1. Route functions (first non-empty answer wins)
+2. Pattern routes, matched against the key (first match wins)
+3. The driver you passed to `Open`
 
 ## Add Middleware
 
-Middleware intercepts the data stream on read and/or write. Register middleware for encryption, compression, or custom processing.
+Middleware intercepts the data on read, on write or both. Register it for encryption, compression or your own processing. You can pass it to `trove.Open` with `trove.WithMiddleware` or add it later with `UseMiddleware`:
 
 ```go
 import (
@@ -323,9 +328,9 @@ t.UseMiddleware(middleware.Registration{
 
 ## Next Steps
 
-- [Architecture](/docs/architecture) -- Understand the storage pipeline, routing, and middleware architecture
-- [Drivers](/docs/storage/drivers) -- Full reference for all storage backend drivers
-- [Middleware](/docs/middleware) -- Encryption, compression, deduplication, scanning, and custom middleware
-- [Streaming](/docs/streaming) -- Chunked transfers, backpressure, resumable uploads, and progress hooks
-- [Content-Addressable Storage](/docs/cas) -- Hash-based deduplication and garbage collection
-- [Virtual Filesystem](/docs/vfs) -- `io/fs`-compatible filesystem abstraction over object storage
+- [Architecture](/docs/architecture): the storage pipeline, routing and middleware
+- [Drivers](/docs/concepts/driver-system): how drivers register and what each one supports
+- [Middleware](/docs/storage/middleware): encryption, compression, deduplication, scanning and your own middleware
+- [Streaming](/docs/storage/streaming-engine): chunked transfers, backpressure, resumable uploads and progress hooks
+- [Content-Addressable Storage](/docs/storage/cas): hash-based deduplication and garbage collection
+- [Virtual Filesystem](/docs/storage/vfs): a directory-shaped view of a bucket, with an `io/fs` adapter

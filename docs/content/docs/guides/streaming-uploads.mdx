@@ -320,11 +320,14 @@ fmt.Printf("Sent: %d bytes, Recv: %d bytes, Throughput: %.0f bytes/s\n",
 
 ## Complete Upload Example
 
+A stream moves chunks between a producer and a consumer. It doesn't write anything to a storage driver itself, so a working upload needs a consumer that hands the bytes to Trove. This example reads a file into pooled chunks, drains them into an `io.Pipe`, and lets `t.Put` read the other end:
+
 ```go
 package main
 
 import (
     "context"
+    "errors"
     "fmt"
     "io"
     "log"
@@ -332,75 +335,112 @@ import (
 
     "github.com/xraph/trove"
     "github.com/xraph/trove/driver"
-    "github.com/xraph/trove/stream"
     "github.com/xraph/trove/drivers/localdriver"
+    "github.com/xraph/trove/stream"
 )
 
 func main() {
     ctx := context.Background()
 
     drv := localdriver.New()
-    drv.Open(ctx, "file:///tmp/trove-stream")
+    if err := drv.Open(ctx, "file:///tmp/trove-stream"); err != nil {
+        log.Fatal(err)
+    }
 
-    t, _ := trove.Open(drv, trove.WithPoolSize(8))
+    t, err := trove.Open(drv, trove.WithPoolSize(8))
+    if err != nil {
+        log.Fatal(err)
+    }
     defer t.Close(ctx)
 
-    t.CreateBucket(ctx, "uploads")
+    if err := t.CreateBucket(ctx, "uploads"); err != nil && !errors.Is(err, trove.ErrBucketExists) {
+        log.Fatal(err)
+    }
 
-    // Open a local file to upload.
     file, err := os.Open("/path/to/large-file.zip")
     if err != nil {
         log.Fatal(err)
     }
     defer file.Close()
 
-    stat, _ := file.Stat()
+    stat, err := file.Stat()
+    if err != nil {
+        log.Fatal(err)
+    }
 
-    // Acquire a managed upload stream.
     s, err := t.Stream(ctx, "uploads", "large-file.zip", stream.DirectionUpload,
-        stream.WithChunkSize(4 * 1024 * 1024),
-        stream.WithResumable(),
+        stream.WithChunkSize(4*1024*1024),
         stream.WithOnProgress(func(p stream.Progress) {
-            fmt.Printf("\r%d%% complete (%.1f MB/s)", p.Percent, p.Speed/(1024*1024))
-        }),
-        stream.WithOnComplete(func(info *driver.ObjectInfo) {
-            fmt.Printf("\nDone: %s\n", info.Key)
+            fmt.Printf("\r%d%% complete", p.Percent)
         }),
     )
     if err != nil {
         log.Fatal(err)
     }
     defer t.Pool().Release(s)
+    s.SetTotalSize(stat.Size())
 
-    // Start the stream.
-    s.Start()
-
-    // Write chunks from the file.
-    idx := 0
-    for {
-        buf := s.ChunkPool().Get()
-        n, err := file.Read(buf)
-        if n > 0 {
-            s.Write(&stream.Chunk{Index: idx, Data: buf[:n], Size: n})
-            idx++
-        }
-        if err == io.EOF {
-            break
-        }
-        if err != nil {
-            s.Fail(err)
-            return
-        }
+    if err := s.Start(); err != nil {
+        log.Fatal(err)
     }
 
-    // Complete the upload.
-    s.Complete(&driver.ObjectInfo{Key: "large-file.zip", Size: stat.Size()})
+    // Consumer: drain chunks into a pipe that Put reads from.
+    pr, pw := io.Pipe()
+    go func() {
+        for {
+            chunk, err := s.Read(ctx)
+            if errors.Is(err, io.EOF) {
+                _ = pw.Close()
+                return
+            }
+            if err != nil {
+                _ = pw.CloseWithError(err)
+                return
+            }
+            _, werr := pw.Write(chunk.Data[:chunk.Size])
+            s.ChunkPool().Put(chunk.Data)
+            if werr != nil {
+                return
+            }
+        }
+    }()
+
+    // Producer: read the file into pooled buffers and write chunks.
+    go func() {
+        for idx := 0; ; idx++ {
+            buf := s.ChunkPool().Get()
+            n, err := io.ReadFull(file, buf)
+            if n > 0 {
+                if werr := s.Write(&stream.Chunk{Index: idx, Data: buf, Size: n}); werr != nil {
+                    s.Fail(werr)
+                    return
+                }
+            }
+            if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+                break
+            }
+            if err != nil {
+                s.Fail(err)
+                _ = pw.CloseWithError(err)
+                return
+            }
+        }
+        _ = s.Complete(&driver.ObjectInfo{Key: "large-file.zip", Size: stat.Size()})
+    }()
+
+    info, err := t.Put(ctx, "uploads", "large-file.zip", pr)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("\nstored %s (%d bytes)\n", info.Key, info.Size)
 }
 ```
 
+The producer and consumer run in their own goroutines because `Write` blocks under the default backpressure mode once the stream's channel is full. `Complete` closes the channel, which is how the consumer's `Read` sees `io.EOF`.
+
 ## Cleanup
 
-Always close the pool when done. This waits for active streams to finish and releases resources.
+Always close a pool you created yourself when you're done with it.
 
 ```go
 if err := pool.Close(); err != nil {

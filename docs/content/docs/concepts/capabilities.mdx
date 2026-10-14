@@ -3,7 +3,13 @@ title: "Capabilities"
 description: "Optional driver capabilities via interface extension: multipart, presign, versioning, notifications, lifecycle, range reads."
 ---
 
-The core `driver.Driver` interface is intentionally minimal. Advanced features are exposed through optional capability interfaces that a driver may or may not implement. This keeps the contract simple while allowing each backend to expose its native strengths.
+import { Callout } from "fumadocs-ui/components/callout";
+
+The core `driver.Driver` interface is intentionally minimal. Advanced features are optional capability interfaces in the `driver` package, which a driver may or may not implement.
+
+<Callout type="warn">
+Only three capabilities are implemented today, and only by the cloud drivers: `MultipartDriver`, `PresignDriver` and `RangeDriver` on S3, GCS and Azure. `VersioningDriver`, `NotificationDriver`, `LifecycleDriver` and `ServerCopyDriver` are defined, but no built-in driver implements them, so a type assertion for them always fails. Their sections below describe the interfaces for anyone writing a driver.
+</Callout>
 
 ## Capability Check Pattern
 
@@ -19,7 +25,7 @@ if mp, ok := drv.(driver.MultipartDriver); ok {
 }
 ```
 
-This pattern is safe -- if the driver does not implement the interface, the assertion returns `false` and no capability methods are called.
+This pattern is safe: if the driver doesn't implement the interface, the assertion returns `false` and no capability method is called.
 
 ## MultipartDriver
 
@@ -70,7 +76,7 @@ if ps, ok := drv.(driver.PresignDriver); ok {
 
 ## VersioningDriver
 
-Manages object version history for audit trails and point-in-time recovery.
+Manages object version history. No built-in driver implements it.
 
 ```go
 type VersioningDriver interface {
@@ -98,7 +104,7 @@ if vd, ok := drv.(driver.VersioningDriver); ok {
 
 ## NotificationDriver
 
-Provides real-time change notifications via a Go channel.
+Provides change notifications on a Go channel. No built-in driver implements it.
 
 ```go
 type NotificationDriver interface {
@@ -129,7 +135,7 @@ if nd, ok := drv.(driver.NotificationDriver); ok {
 
 ## LifecycleDriver
 
-Configures automatic object expiration and storage class transitions.
+Configures object expiration and storage class transitions. No built-in driver implements it.
 
 ```go
 type LifecycleDriver interface {
@@ -182,7 +188,7 @@ if rd, ok := drv.(driver.RangeDriver); ok {
 
 ## ServerCopyDriver
 
-Performs server-side copy to avoid downloading and re-uploading data.
+Performs a server-side copy, so the data isn't downloaded and uploaded again. No built-in driver implements it. `t.Copy` calls the core `Driver.Copy` method of the driver that owns the source, which each driver implements in its own way.
 
 ```go
 type ServerCopyDriver interface {
@@ -206,10 +212,10 @@ if sc, ok := drv.(driver.ServerCopyDriver); ok {
 
 | Capability | Local | Memory | S3 | GCS | Azure | SFTP |
 |------------|:-----:|:------:|:--:|:---:|:-----:|:----:|
-| MultipartDriver | -- | -- | Yes | Yes | Yes | -- |
-| PresignDriver | -- | -- | Yes | Yes | Yes | -- |
-| VersioningDriver | -- | -- | Yes | -- | -- | -- |
-| NotificationDriver | -- | -- | Yes | Yes | -- | -- |
-| LifecycleDriver | -- | -- | Yes | Yes | -- | -- |
-| RangeDriver | -- | -- | Yes | Yes | Yes | -- |
-| ServerCopyDriver | -- | -- | Yes | Yes | Yes | -- |
+| MultipartDriver | no | no | yes | yes | yes | no |
+| PresignDriver | no | no | yes | yes | yes | no |
+| RangeDriver | no | no | yes | yes | yes | no |
+| VersioningDriver | no | no | no | no | no | no |
+| NotificationDriver | no | no | no | no | no | no |
+| LifecycleDriver | no | no | no | no | no | no |
+| ServerCopyDriver | no | no | no | no | no | no |
