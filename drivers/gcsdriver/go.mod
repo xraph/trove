@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	cloud.google.com/go/storage v1.69.0
 	github.com/stretchr/testify v1.12.1
-	github.com/xraph/trove v1.7.0
+	github.com/xraph/trove v1.8.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0

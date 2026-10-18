@@ -11,7 +11,7 @@ require (
 	github.com/xraph/grove/drivers/mongodriver v1.8.0
 	github.com/xraph/grove/drivers/pgdriver v1.8.0
 	github.com/xraph/grove/drivers/sqlitedriver v1.8.0
-	github.com/xraph/trove v1.7.0
+	github.com/xraph/trove v1.8.0
 	github.com/xraph/vault v1.8.0
 	github.com/xraph/vessel v1.0.4
 	github.com/xraph/warden v1.8.0
