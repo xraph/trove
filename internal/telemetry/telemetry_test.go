@@ -57,9 +57,21 @@ func TestClassNeverQuotesTheMessage(t *testing.T) {
 	}
 }
 
+type countingRecorder struct{ adds int }
+
+func (c *countingRecorder) Add(string, float64, ...string)     { c.adds++ }
+func (c *countingRecorder) Observe(string, float64, ...string) {}
+
 func TestRecorderContext(t *testing.T) {
 	assert.Nil(t, RecorderFrom(context.Background()))
-	assert.Equal(t, context.Background(), ContextWithRecorder(context.Background(), nil))
+	assert.Nil(t, RecorderFrom(ContextWithRecorder(context.Background(), nil)))
+
+	// A nil Recorder replaces the one the context carried, so a Trove with
+	// no metrics never records on an outer Trove's Recorder.
+	outer := &countingRecorder{}
+	ctx := ContextWithRecorder(context.Background(), outer)
+	assert.Equal(t, observe.Recorder(outer), RecorderFrom(ctx))
+	assert.Nil(t, RecorderFrom(ContextWithRecorder(ctx, nil)))
 
 	// A nil Recorder records nothing and does not panic.
 	Add(nil, observe.MetricScans, 1, observe.ScanClean)

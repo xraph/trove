@@ -263,11 +263,11 @@ type recorderKey struct{}
 // ContextWithRecorder returns ctx carrying r. The facade puts its Recorder
 // on the context it hands write middleware, so middleware that records (the
 // scan middleware) measures on the same Recorder as the Trove that runs it.
-// A nil r returns ctx unchanged.
+//
+// A nil r is stored too, so it replaces whatever ctx carried: a Trove with no
+// Recorder, called from inside another Trove's middleware, must not record
+// on the outer one's.
 func ContextWithRecorder(ctx context.Context, r observe.Recorder) context.Context {
-	if r == nil {
-		return ctx
-	}
 	return context.WithValue(ctx, recorderKey{}, r)
 }
 

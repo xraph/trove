@@ -13,6 +13,7 @@ import (
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/drivers/memdriver"
+	"github.com/xraph/trove/internal/telemetry"
 	"github.com/xraph/trove/internal/telemetrytest"
 	"github.com/xraph/trove/observe"
 )
@@ -124,6 +125,23 @@ func TestScanSkipsAreCounted(t *testing.T) {
 
 	assert.InDelta(t, 2, metrics.Counter(observe.MetricScans, observe.ScanSkipped), 0)
 	assert.InDelta(t, 0, metrics.Counter(observe.MetricScans, observe.ScanClean), 0)
+}
+
+// TestNestedTroveWithoutMetricsDoesNotInheritARecorder runs a Put whose
+// context already carries another Trove's Recorder, as it would inside that
+// Trove's middleware. The inner Trove has no metrics, so its scan must not
+// count on the outer Recorder.
+func TestNestedTroveWithoutMetricsDoesNotInheritARecorder(t *testing.T) {
+	telemetrytest.Spans(t)
+	outer := telemetrytest.NewRecorder(t)
+	ctx := telemetry.ContextWithRecorder(t.Context(), outer)
+
+	inner := openScanned(t, nil, WithProvider(&mockProvider{result: &Result{Clean: true}}))
+	_, err := inner.Put(ctx, "b", "k.txt", strings.NewReader("payload"))
+	require.NoError(t, err)
+
+	assert.InDelta(t, 0, outer.Counter(observe.MetricScans, observe.ScanClean), 0)
+	assert.Empty(t, outer.Series(observe.MetricScans))
 }
 
 // TestScanOutsideTroveRecordsNoMetrics checks the middleware still works on
