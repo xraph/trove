@@ -6,10 +6,14 @@ import (
 	"io"
 	"sort"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/xraph/trove/cas"
 	"github.com/xraph/trove/driver"
 	"github.com/xraph/trove/internal"
+	"github.com/xraph/trove/internal/telemetry"
 	"github.com/xraph/trove/middleware"
+	"github.com/xraph/trove/observe"
 	"github.com/xraph/trove/stream"
 	"github.com/xraph/trove/vfs"
 )
@@ -25,6 +29,12 @@ type Trove struct {
 	resolver  *middleware.Resolver // middleware pipeline resolver
 	cas       *cas.CAS             // content-addressable storage (nil if disabled)
 	vfsBucket string               // VFS default bucket (empty = use config.DefaultBucket)
+	metrics   observe.Recorder     // receives measurements (nil records nothing)
+
+	// Set by WithCAS. The CAS is built once every option has run, so it
+	// records on the Recorder whatever order the options came in.
+	casEnabled bool
+	casAlg     cas.HashAlgorithm
 }
 
 // Open creates a new Trove instance with the given default driver and options.
@@ -53,6 +63,13 @@ func Open(drv driver.Driver, opts ...Option) (*Trove, error) {
 		}
 	}
 
+	if t.casEnabled {
+		t.cas = cas.New(t.driver,
+			cas.WithAlgorithm(t.casAlg),
+			cas.WithMetrics(t.metrics),
+		)
+	}
+
 	// Initialize the default streaming pool if not set by options.
 	if t.pool == nil {
 		t.pool = stream.NewPool("default", stream.PoolConfig{
@@ -68,7 +85,7 @@ func Open(drv driver.Driver, opts ...Option) (*Trove, error) {
 
 // Put stores an object from a reader. Data passes through the write
 // middleware pipeline (e.g., encryption, compression) before reaching the driver.
-func (t *Trove) Put(ctx context.Context, bucket, key string, r io.Reader, opts ...driver.PutOption) (*driver.ObjectInfo, error) {
+func (t *Trove) Put(ctx context.Context, bucket, key string, r io.Reader, opts ...driver.PutOption) (info *driver.ObjectInfo, err error) {
 	if bucket == "" {
 		bucket = t.config.DefaultBucket
 	}
@@ -79,20 +96,32 @@ func (t *Trove) Put(ctx context.Context, bucket, key string, r io.Reader, opts .
 		return nil, ErrKeyEmpty
 	}
 
+	drv := t.router.Resolve(bucket, key)
+	ctx, o := t.startOp(ctx, drv, observe.OperationPut, telemetry.SpanPutObject)
+	defer func() { o.end(err, infoSize(info), observe.DirectionWrite) }()
+
 	// Resolve the write middleware pipeline.
 	pipeline := t.resolver.ResolveWrite(ctx, bucket, key)
 	if len(pipeline) > 0 {
-		r = t.applyWritePipeline(ctx, r, key, pipeline)
+		pr := t.applyWritePipeline(telemetry.ContextWithRecorder(ctx, t.metrics), r, key, pipeline)
+		// The driver is done with the reader once Put returns. Closing it
+		// releases the pipeline goroutine when the driver stopped reading
+		// before the end (a failed upload), which otherwise blocked on its
+		// next write forever.
+		defer pr.Close()
+		r = pr
 	}
 
-	drv := t.router.Resolve(bucket, key)
-	return drv.Put(ctx, bucket, key, r, opts...)
+	return drv.Put(telemetry.DriverContext(ctx), bucket, key, r, opts...)
 }
 
 // Get retrieves an object, returning a ReadCloser for the content.
 // Data passes through the read middleware pipeline (e.g., decryption,
 // decompression) after being retrieved from the driver.
-func (t *Trove) Get(ctx context.Context, bucket, key string, opts ...driver.GetOption) (*driver.ObjectReader, error) {
+//
+// Its span ends when Get returns, so it covers the driver's request and
+// the response headers but not the time the caller spends reading the body.
+func (t *Trove) Get(ctx context.Context, bucket, key string, opts ...driver.GetOption) (obj *driver.ObjectReader, err error) {
 	if bucket == "" {
 		bucket = t.config.DefaultBucket
 	}
@@ -104,7 +133,10 @@ func (t *Trove) Get(ctx context.Context, bucket, key string, opts ...driver.GetO
 	}
 
 	drv := t.router.Resolve(bucket, key)
-	obj, err := drv.Get(ctx, bucket, key, opts...)
+	ctx, o := t.startOp(ctx, drv, observe.OperationGet, telemetry.SpanGetObject)
+	defer func() { o.end(err, readerSize(obj), observe.DirectionRead) }()
+
+	obj, err = drv.Get(telemetry.DriverContext(ctx), bucket, key, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +156,7 @@ func (t *Trove) Get(ctx context.Context, bucket, key string, opts ...driver.GetO
 }
 
 // Delete removes an object.
-func (t *Trove) Delete(ctx context.Context, bucket, key string, opts ...driver.DeleteOption) error {
+func (t *Trove) Delete(ctx context.Context, bucket, key string, opts ...driver.DeleteOption) (err error) {
 	if bucket == "" {
 		bucket = t.config.DefaultBucket
 	}
@@ -136,11 +168,14 @@ func (t *Trove) Delete(ctx context.Context, bucket, key string, opts ...driver.D
 	}
 
 	drv := t.router.Resolve(bucket, key)
-	return drv.Delete(ctx, bucket, key, opts...)
+	ctx, o := t.startOp(ctx, drv, observe.OperationDelete, telemetry.SpanDeleteObject)
+	defer func() { o.end(err, noSize, "") }()
+
+	return drv.Delete(telemetry.DriverContext(ctx), bucket, key, opts...)
 }
 
 // Head returns object metadata without content.
-func (t *Trove) Head(ctx context.Context, bucket, key string) (*driver.ObjectInfo, error) {
+func (t *Trove) Head(ctx context.Context, bucket, key string) (info *driver.ObjectInfo, err error) {
 	if bucket == "" {
 		bucket = t.config.DefaultBucket
 	}
@@ -152,11 +187,14 @@ func (t *Trove) Head(ctx context.Context, bucket, key string) (*driver.ObjectInf
 	}
 
 	drv := t.router.Resolve(bucket, key)
-	return drv.Head(ctx, bucket, key)
+	ctx, o := t.startOp(ctx, drv, observe.OperationHead, telemetry.SpanHeadObject)
+	defer func() { o.end(err, infoSize(info), "") }()
+
+	return drv.Head(telemetry.DriverContext(ctx), bucket, key)
 }
 
 // List returns objects matching the given options.
-func (t *Trove) List(ctx context.Context, bucket string, opts ...driver.ListOption) (*driver.ObjectIterator, error) {
+func (t *Trove) List(ctx context.Context, bucket string, opts ...driver.ListOption) (it *driver.ObjectIterator, err error) {
 	if bucket == "" {
 		bucket = t.config.DefaultBucket
 	}
@@ -165,11 +203,14 @@ func (t *Trove) List(ctx context.Context, bucket string, opts ...driver.ListOpti
 	}
 
 	drv := t.router.Resolve(bucket, "")
-	return drv.List(ctx, bucket, opts...)
+	ctx, o := t.startOp(ctx, drv, observe.OperationList, telemetry.SpanListObjects)
+	defer func() { o.end(err, noSize, "") }()
+
+	return drv.List(telemetry.DriverContext(ctx), bucket, opts...)
 }
 
 // Copy copies an object within or across buckets.
-func (t *Trove) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string, opts ...driver.CopyOption) (*driver.ObjectInfo, error) {
+func (t *Trove) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string, opts ...driver.CopyOption) (info *driver.ObjectInfo, err error) {
 	if srcBucket == "" || dstBucket == "" {
 		return nil, ErrBucketEmpty
 	}
@@ -179,32 +220,44 @@ func (t *Trove) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey s
 
 	// Use the source driver for the copy operation.
 	drv := t.router.Resolve(srcBucket, srcKey)
-	return drv.Copy(ctx, srcBucket, srcKey, dstBucket, dstKey, opts...)
+	ctx, o := t.startOp(ctx, drv, observe.OperationCopy, telemetry.SpanCopyObject)
+	defer func() { o.end(err, infoSize(info), "") }()
+
+	return drv.Copy(telemetry.DriverContext(ctx), srcBucket, srcKey, dstBucket, dstKey, opts...)
 }
 
 // --- Bucket Operations ---
 
 // CreateBucket creates a new bucket on the default driver.
-func (t *Trove) CreateBucket(ctx context.Context, name string, opts ...driver.BucketOption) error {
+func (t *Trove) CreateBucket(ctx context.Context, name string, opts ...driver.BucketOption) (err error) {
 	if name == "" {
 		return ErrBucketEmpty
 	}
 
-	return t.driver.CreateBucket(ctx, name, opts...)
+	ctx, o := t.startOp(ctx, t.driver, observe.OperationCreateBucket, telemetry.SpanCreateBucket)
+	defer func() { o.end(err, noSize, "") }()
+
+	return t.driver.CreateBucket(telemetry.DriverContext(ctx), name, opts...)
 }
 
 // DeleteBucket removes a bucket from the default driver.
-func (t *Trove) DeleteBucket(ctx context.Context, name string) error {
+func (t *Trove) DeleteBucket(ctx context.Context, name string) (err error) {
 	if name == "" {
 		return ErrBucketEmpty
 	}
 
-	return t.driver.DeleteBucket(ctx, name)
+	ctx, o := t.startOp(ctx, t.driver, observe.OperationDeleteBucket, telemetry.SpanDeleteBucket)
+	defer func() { o.end(err, noSize, "") }()
+
+	return t.driver.DeleteBucket(telemetry.DriverContext(ctx), name)
 }
 
 // ListBuckets returns all buckets from the default driver.
-func (t *Trove) ListBuckets(ctx context.Context) ([]driver.BucketInfo, error) {
-	return t.driver.ListBuckets(ctx)
+func (t *Trove) ListBuckets(ctx context.Context) (buckets []driver.BucketInfo, err error) {
+	ctx, o := t.startOp(ctx, t.driver, observe.OperationListBuckets, telemetry.SpanListBuckets)
+	defer func() { o.end(err, noSize, "") }()
+
+	return t.driver.ListBuckets(telemetry.DriverContext(ctx))
 }
 
 // --- Accessors ---
@@ -225,6 +278,7 @@ func (t *Trove) Backend(name string) (*Trove, error) {
 		pool:     t.pool,     // share the parent's streaming pool
 		resolver: t.resolver, // share the parent's middleware pipeline
 		cas:      t.cas,      // share the parent's CAS
+		metrics:  t.metrics,  // record on the parent's recorder
 	}, nil
 }
 
@@ -330,34 +384,49 @@ func (t *Trove) Close(ctx context.Context) error {
 
 // applyWritePipeline wraps the reader through the write middleware chain.
 // Write middleware wraps writers, so we create a pipe, wrap the writer side,
-// copy data through, and return the reader side.
-func (t *Trove) applyWritePipeline(ctx context.Context, r io.Reader, key string, pipeline []middleware.WriteMiddleware) io.Reader {
+// copy data through, and return the reader side. The caller closes the
+// reader side once the driver has finished with it.
+//
+// The goroutine records one "apply write middleware" span, from wrapping
+// the chain to closing it, as a child of the operation's span.
+func (t *Trove) applyWritePipeline(ctx context.Context, r io.Reader, key string, pipeline []middleware.WriteMiddleware) *io.PipeReader {
 	// Create a buffer to hold the transformed data.
 	pr, pw := io.Pipe()
 
 	go func() {
+		mwCtx, span := telemetry.Start(ctx, telemetry.SpanApplyWriteMiddleware, trace.SpanKindInternal,
+			telemetry.AttrMiddlewareCount.Int(len(pipeline)),
+			telemetry.AttrMiddlewareNames.StringSlice(middlewareNames(pipeline)),
+		)
+		var err error
+		defer func() {
+			telemetry.Fail(span, err, rootSentinels...)
+			span.End()
+		}()
+
 		// Build the writer chain: innermost writer is the pipe writer.
 		var w io.WriteCloser = pw
 
 		// Apply middleware in reverse order so the first middleware in the
 		// pipeline is the outermost wrapper (data flows through it first).
 		for i := len(pipeline) - 1; i >= 0; i-- {
-			wrapped, err := pipeline[i].WrapWriter(ctx, w, key)
-			if err != nil {
-				_ = pw.CloseWithError(fmt.Errorf("trove: middleware %d wrap writer: %w", i, err))
+			wrapped, wrapErr := pipeline[i].WrapWriter(mwCtx, w, key)
+			if wrapErr != nil {
+				err = fmt.Errorf("trove: middleware %d wrap writer: %w", i, wrapErr)
+				_ = pw.CloseWithError(err)
 				return
 			}
 			w = wrapped
 		}
 
 		// Copy original data through the middleware chain.
-		if _, err := io.Copy(w, r); err != nil {
+		if _, err = io.Copy(w, r); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		}
 
 		// Close the writer chain to flush/finalize middleware.
-		if err := w.Close(); err != nil {
+		if err = w.Close(); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		}

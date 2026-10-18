@@ -102,11 +102,12 @@ func WithMiddlewareAt(priority int, mws ...middleware.Middleware) Option {
 }
 
 // WithCAS enables content-addressable storage with the given hash algorithm.
+// Open builds the CAS on the default driver once every option has run, so it
+// records on the Recorder from WithMetrics wherever that option sits.
 func WithCAS(alg cas.HashAlgorithm) Option {
 	return func(t *Trove) error {
-		t.cas = cas.New(t.driver,
-			cas.WithAlgorithm(alg),
-		)
+		t.casEnabled = true
+		t.casAlg = alg
 		return nil
 	}
 }
