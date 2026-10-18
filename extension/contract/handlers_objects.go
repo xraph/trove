@@ -9,6 +9,7 @@ import (
 
 	"github.com/xraph/forge"
 	"github.com/xraph/forge/extensions/dashboard/contract"
+	"go.opentelemetry.io/otel/baggage"
 
 	"github.com/xraph/trove"
 	"github.com/xraph/trove/driver"
@@ -374,7 +375,9 @@ func objectsPresignHandler(deps Deps) func(context.Context, objectsPresignInput,
 		if !ok {
 			return linkOutput{}, unavailable("This driver cannot create presigned links.")
 		}
-		link, err := signer.PresignGet(ctx, in.Bucket, in.Key, ttl)
+		// The facade has no presign call, so this reaches the driver
+		// directly: no trove span, and none of the caller's baggage.
+		link, err := signer.PresignGet(baggage.ContextWithoutBaggage(ctx), in.Bucket, in.Key, ttl)
 		if err != nil {
 			if deps.Logger != nil {
 				deps.Logger.Error("trove/contract: presign failed", forge.F("store", st.Name),

@@ -94,7 +94,9 @@ The streaming pool's `PoolMetrics` and a stream's `Metrics()` are in-process cou
 
 Bucket names, object keys, CAS content hashes, content, signed URLs, presign results, dashboard tickets, DSNs, credentials and error text. Bucket names count because the [multi-tenancy guide](/docs/concepts/multi-tenancy) suggests a bucket per tenant. Metric labels are the fixed values above and nothing else.
 
-Every driver call runs on the operation's context with its baggage removed. forge copies the client's `baggage` header into the request context, and a driver whose client propagated trace context would forward it to your storage provider. The scan middleware drops it before it calls the scanner too.
+Every driver call the facade and the CAS make runs on the operation's context with its baggage removed. forge copies the client's `baggage` header into the request context, and a driver whose client propagated trace context would forward it to your storage provider. The scan middleware drops it before it calls the scanner too.
+
+Three dashboard contract handlers reach a driver without going through the facade: the CAS listing, the emptiness check before a bucket delete, and presign. They drop baggage as well, but they record no Trove span and no metric. Only forge's span for the dashboard request covers them. The same is true of any call you make on `t.Driver()` or `t.DriverFor(...)` yourself.
 
 A DSN that doesn't parse fails with an error that names only the scheme and the kind of problem. forge records a failed `Register`'s error text on its lifecycle span, so this matters even for a typo.
 
