@@ -70,7 +70,10 @@ func (d *GCSDriver) Open(ctx context.Context, dsn string, opts ...driver.Option)
 		gcsCfg.Endpoint = drvCfg.Endpoint
 	}
 
-	var clientOpts []option.ClientOption
+	// No otelhttp transport: it would record every bucket and object path
+	// in url.full and forward the caller's baggage to Google. See untraced
+	// for the library's own spans.
+	clientOpts := []option.ClientOption{option.WithTelemetryDisabled()}
 
 	if gcsCfg.CredentialsFile != "" {
 		clientOpts = append(clientOpts, option.WithCredentialsFile(gcsCfg.CredentialsFile))
@@ -108,6 +111,8 @@ func (d *GCSDriver) Close(_ context.Context) error {
 
 // Ping verifies GCS connectivity by checking bucket attributes.
 func (d *GCSDriver) Ping(ctx context.Context) error {
+	ctx = untraced(ctx)
+
 	client, cfg, err := d.getClient()
 	if err != nil {
 		return err
@@ -125,6 +130,8 @@ func (d *GCSDriver) Ping(ctx context.Context) error {
 
 // Put stores an object in GCS.
 func (d *GCSDriver) Put(ctx context.Context, bucket, key string, r io.Reader, opts ...driver.PutOption) (*driver.ObjectInfo, error) {
+	ctx = untraced(ctx)
+
 	cfg := driver.ApplyPutOptions(opts...)
 	client, _, err := d.getClient()
 	if err != nil {
@@ -182,6 +189,8 @@ func (d *GCSDriver) Put(ctx context.Context, bucket, key string, r io.Reader, op
 
 // Get retrieves an object from GCS.
 func (d *GCSDriver) Get(ctx context.Context, bucket, key string, _ ...driver.GetOption) (*driver.ObjectReader, error) {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return nil, err
@@ -214,6 +223,8 @@ func (d *GCSDriver) Get(ctx context.Context, bucket, key string, _ ...driver.Get
 
 // Delete removes an object from GCS.
 func (d *GCSDriver) Delete(ctx context.Context, bucket, key string, _ ...driver.DeleteOption) error {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return err
@@ -235,6 +246,8 @@ func (d *GCSDriver) Delete(ctx context.Context, bucket, key string, _ ...driver.
 
 // Head returns object metadata without content.
 func (d *GCSDriver) Head(ctx context.Context, bucket, key string) (*driver.ObjectInfo, error) {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return nil, err
@@ -253,6 +266,8 @@ func (d *GCSDriver) Head(ctx context.Context, bucket, key string) (*driver.Objec
 
 // List returns objects matching the given options.
 func (d *GCSDriver) List(ctx context.Context, bucket string, opts ...driver.ListOption) (*driver.ObjectIterator, error) {
+	ctx = untraced(ctx)
+
 	cfg := driver.ApplyListOptions(opts...)
 	client, _, err := d.getClient()
 	if err != nil {
@@ -317,6 +332,8 @@ func (d *GCSDriver) List(ctx context.Context, bucket string, opts ...driver.List
 
 // Copy copies an object within or across buckets.
 func (d *GCSDriver) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstKey string, _ ...driver.CopyOption) (*driver.ObjectInfo, error) {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return nil, err
@@ -340,6 +357,8 @@ func (d *GCSDriver) Copy(ctx context.Context, srcBucket, srcKey, dstBucket, dstK
 
 // CreateBucket creates a new GCS bucket.
 func (d *GCSDriver) CreateBucket(ctx context.Context, name string, _ ...driver.BucketOption) error {
+	ctx = untraced(ctx)
+
 	client, cfg, err := d.getClient()
 	if err != nil {
 		return err
@@ -360,6 +379,8 @@ func (d *GCSDriver) CreateBucket(ctx context.Context, name string, _ ...driver.B
 
 // DeleteBucket removes a GCS bucket.
 func (d *GCSDriver) DeleteBucket(ctx context.Context, name string) error {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return err
@@ -376,6 +397,8 @@ func (d *GCSDriver) DeleteBucket(ctx context.Context, name string) error {
 
 // ListBuckets returns all accessible buckets.
 func (d *GCSDriver) ListBuckets(ctx context.Context) ([]driver.BucketInfo, error) {
+	ctx = untraced(ctx)
+
 	client, cfg, err := d.getClient()
 	if err != nil {
 		return nil, err

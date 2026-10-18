@@ -47,6 +47,8 @@ func (d *GCSDriver) InitiateMultipart(_ context.Context, bucket, key string, _ .
 
 // UploadPart uploads a single part as a temporary GCS object.
 func (d *GCSDriver) UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, r io.Reader) (*driver.PartInfo, error) {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return nil, err
@@ -93,6 +95,8 @@ func (d *GCSDriver) UploadPart(ctx context.Context, bucket, key, uploadID string
 
 // CompleteMultipart composes all part objects into the final object and cleans up.
 func (d *GCSDriver) CompleteMultipart(ctx context.Context, bucket, key, uploadID string, parts []driver.PartInfo) (*driver.ObjectInfo, error) {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return nil, err
@@ -148,6 +152,8 @@ func (d *GCSDriver) CompleteMultipart(ctx context.Context, bucket, key, uploadID
 
 // AbortMultipart cancels a multipart upload and cleans up temporary objects.
 func (d *GCSDriver) AbortMultipart(ctx context.Context, bucket, key, uploadID string) error {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return err
