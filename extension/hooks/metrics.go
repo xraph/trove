@@ -1,92 +1,77 @@
 package hooks
 
 import (
-	log "github.com/xraph/go-utils/log"
-
 	"github.com/xraph/forge"
+
+	"github.com/xraph/trove/observe"
 )
 
-// MetricsHook registers Prometheus metrics for Trove operations.
-type MetricsHook struct {
-	logger log.Logger
+// Metrics records Trove's metrics on a Forge app's metrics registry. It
+// implements observe.Recorder, so you hand it to trove.WithMetrics (the
+// extension does that for every store it opens) or to cas.WithMetrics.
+//
+// Every metric in observe.Metrics is declared once, up front, with its
+// label keys. Forge exports each under its namespace prefix:
+//
+//	trove_operation_duration_seconds   forge_trove_operation_duration_seconds
+//	trove_object_bytes_total           forge_trove_object_bytes_total
+//	trove_scans_total                  forge_trove_scans_total
+//	trove_cas_stores_total             forge_trove_cas_stores_total
+//	trove_cas_gc_deleted_total         forge_trove_cas_gc_deleted_total
+//	trove_cas_gc_freed_bytes_total     forge_trove_cas_gc_freed_bytes_total
+//
+// No metric carries a bucket, a key, a store name or a tenant. Package
+// observe lists every label value.
+type Metrics struct {
+	counters   map[string]*forge.Vec[forge.Counter]
+	histograms map[string]*forge.Vec[forge.Histogram]
 }
 
-// NewMetricsHook creates a metrics hook.
-// Metrics are registered via the Forge app's metrics registry.
-func NewMetricsHook(fapp forge.App, logger log.Logger) *MetricsHook {
-	return &MetricsHook{logger: logger}
+var _ observe.Recorder = (*Metrics)(nil)
+
+// NewMetrics declares Trove's metrics on m. Call it once per app and share
+// the result across stores: a second call declares the same names again. A
+// nil m returns nil, which records nothing.
+func NewMetrics(m forge.Metrics) *Metrics {
+	if m == nil {
+		return nil
+	}
+
+	out := &Metrics{
+		counters:   make(map[string]*forge.Vec[forge.Counter]),
+		histograms: make(map[string]*forge.Vec[forge.Histogram]),
+	}
+	for _, def := range observe.Metrics() {
+		switch def.Kind {
+		case observe.KindCounter:
+			out.counters[def.Name] = forge.CounterVec(m, def.Name, def.Labels...)
+		case observe.KindHistogram:
+			out.histograms[def.Name] = forge.HistogramVec(m, def.Name, forge.HistogramOpts{
+				Buckets: def.Buckets,
+				Help:    def.Help,
+				Unit:    def.Unit,
+			}, def.Labels...)
+		}
+	}
+	return out
 }
 
-// Metric names.
-const (
-	MetricObjectsTotal       = "trove_objects_total"
-	MetricObjectsSizeBytes   = "trove_objects_size_bytes"
-	MetricUploadsActive      = "trove_uploads_active"
-	MetricUploadsCompleted   = "trove_uploads_completed_total"
-	MetricUploadsFailed      = "trove_uploads_failed_total"
-	MetricStreamBytesSent    = "trove_stream_bytes_sent_total"
-	MetricStreamBytesRecv    = "trove_stream_bytes_recv_total"
-	MetricMiddlewareDuration = "trove_middleware_duration_seconds"
-	MetricCASDedupHits       = "trove_cas_dedup_hits_total"
-	MetricCASDedupBytesSaved = "trove_cas_dedup_bytes_saved"
-	MetricDriverLatency      = "trove_driver_latency_seconds"
-	MetricDriverErrors       = "trove_driver_errors_total"
-	MetricQuotaUsageBytes    = "trove_quota_usage_bytes"
-	MetricQuotaLimitBytes    = "trove_quota_limit_bytes"
-)
-
-// RegisterMetrics registers all Trove Prometheus metrics.
-// This is called during extension initialization when metrics are available.
-func (h *MetricsHook) RegisterMetrics(fapp forge.App) {
-	if h == nil {
+// Add implements observe.Recorder.
+func (m *Metrics) Add(name string, delta float64, labelValues ...string) {
+	if m == nil {
 		return
 	}
-
-	// Metrics registration uses Forge's metrics interface.
-	// The actual Prometheus counters/histograms/gauges are registered
-	// via fapp.Metrics() when available.
-	//
-	// Example with Forge metrics:
-	//   metrics := fapp.Metrics()
-	//   metrics.Counter(MetricObjectsTotal, "Total number of objects stored", "bucket", "driver")
-	//   metrics.Histogram(MetricDriverLatency, "Driver operation latency", "driver", "operation")
-	//   metrics.Gauge(MetricUploadsActive, "Number of active uploads")
-
-	if h.logger != nil {
-		h.logger.Info("registered trove prometheus metrics")
+	if v, ok := m.counters[name]; ok {
+		v.With(labelValues...).Add(delta)
 	}
 }
 
-// RecordObjectCreated increments the objects total counter.
-func (h *MetricsHook) RecordObjectCreated(bucket, driver string, size int64) {
-	if h == nil {
+// Observe implements observe.Recorder.
+func (m *Metrics) Observe(name string, value float64, labelValues ...string) {
+	if m == nil {
 		return
 	}
-	// Increment trove_objects_total{bucket, driver}
-	// Add to trove_objects_size_bytes{bucket, driver}
-}
-
-// RecordDriverLatency records a driver operation latency.
-func (h *MetricsHook) RecordDriverLatency(driver, operation string, durationSec float64) {
-	if h == nil {
-		return
+	if v, ok := m.histograms[name]; ok {
+		v.With(labelValues...).Observe(value)
 	}
-	// Observe trove_driver_latency_seconds{driver, operation}
-}
-
-// RecordDriverError increments the driver error counter.
-func (h *MetricsHook) RecordDriverError(driver, operation string) {
-	if h == nil {
-		return
-	}
-	// Increment trove_driver_errors_total{driver, operation}
-}
-
-// RecordCASDedup records a CAS dedup hit.
-func (h *MetricsHook) RecordCASDedup(bytesSaved int64) {
-	if h == nil {
-		return
-	}
-	// Increment trove_cas_dedup_hits_total
-	// Add to trove_cas_dedup_bytes_saved
 }
