@@ -16,6 +16,7 @@ require (
 	github.com/xraph/vessel v1.0.4
 	github.com/xraph/warden v1.8.0
 	go.mongodb.org/mongo-driver/v2 v2.9.1
+	go.opentelemetry.io/otel v1.47.0
 )
 
 require (
@@ -109,7 +110,6 @@ require (
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
-	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0 // indirect
