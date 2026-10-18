@@ -98,8 +98,15 @@ Every driver call runs on the operation's context with its baggage removed. forg
 
 A DSN that doesn't parse fails with an error that names only the scheme and the kind of problem. forge records a failed `Register`'s error text on its lifecycle span, so this matters even for a typo.
 
-<Callout type="info">
-The GCS driver opens Google's client with `option.WithTelemetryDisabled`, so the client no longer records each request's URL (bucket and object path included) or sends your trace context and baggage to Google. The storage library still opens spans of its own from the global provider, and on a failure those record Google's error message, which quotes the bucket and object. The driver runs every library call under an unsampled copy of your span, so a parent-based sampler (forge's default) drops them. If you configure a sampler that ignores the parent, such as `always_on`, those library spans are exported again.
+<Callout type="warn">
+The GCS driver opens Google's client with `option.WithTelemetryDisabled`, so the client no longer records each request's URL (bucket and object path included) or sends your trace context and baggage to Google. The storage library still opens spans of its own from the global provider, and when a call fails it records Google's error message, which quotes the bucket, the object and sometimes your service account, as the span's status and an exception event.
+
+The driver runs every library call under an unsampled copy of your span, so a parent-based sampler won't sample those spans. That keeps them out of OTLP, but it doesn't stop them being recorded in two cases:
+
+- With a sampler that ignores the parent (`always_on`, or a bare `traceidratio`), they're sampled and exported like any other span.
+- forge's sampler records the spans it would drop while a span processor wants them, and the dashboard's trace collector does whenever the dashboard extension is collecting. Batch exporters skip unsampled spans, so nothing goes out over OTLP, but the dashboard's Traces view stores them, Google's error text included.
+
+There's no fix inside the driver, because the library takes its tracer from the global provider. If that matters for you, keep the dashboard's trace collection off in production.
 </Callout>
 
 ## Things forge records that Trove can't change

@@ -19,7 +19,7 @@ All notable changes to Trove are documented in this file.
 
 #### Fixed
 - **A DSN that fails to parse no longer puts its credentials in the error.** The message names the scheme and the kind of problem and nothing else. forge records a failed `Register`'s error on its lifecycle span, so the old message sent access keys and secrets to your trace backend.
-- **`gcsdriver` keeps object paths and your trace context away from Google's telemetry.** It opens the client with `option.WithTelemetryDisabled` and runs the storage library under an unsampled span, so neither the library's HTTP spans nor its own record bucket and object names, and no `traceparent` or `baggage` header goes to Google.
+- **`gcsdriver` keeps object paths and your trace context away from Google's telemetry.** It opens the client with `option.WithTelemetryDisabled`, so there's no HTTP span recording `url.full` and no `traceparent` or `baggage` header goes to Google, and it runs the storage library under an unsampled span, so a parent-based sampler won't sample the library's own spans. Those spans are still recorded, with Google's error text (bucket, object, sometimes the account), under a sampler that ignores the parent, and in the forge dashboard's Traces view while it collects; forge's sampler records unsampled spans for it. Nothing reaches OTLP in that second case.
 - **A failed upload through write middleware no longer strands a goroutine.** `Put` closes the pipe once the driver returns, so the middleware goroutine stops instead of blocking on its next write forever.
 
 #### Removed

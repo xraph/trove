@@ -58,13 +58,19 @@ func (f *fakeGCS) seen() []http.Header {
 	return append([]http.Header(nil), f.headers...)
 }
 
-// installTracing makes a recording, parent-based provider and forge's
-// default propagators global for the test, which is what a Forge app has.
-func installTracing(t *testing.T) *tracetest.SpanRecorder {
+// installTracing makes a recording provider with the given sampler, and
+// forge's default propagators, global for the test. A nil sampler keeps the
+// SDK default, ParentBased(AlwaysSample), which is what forge's default
+// sampler does for a sampled parent and an unsampled one.
+func installTracing(t *testing.T, sampler sdktrace.Sampler) *tracetest.SpanRecorder {
 	t.Helper()
 	prevTP, prevProp := otel.GetTracerProvider(), otel.GetTextMapPropagator()
 	rec := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	opts := []sdktrace.TracerProviderOption{sdktrace.WithSpanProcessor(rec)}
+	if sampler != nil {
+		opts = append(opts, sdktrace.WithSampler(sampler))
+	}
+	tp := sdktrace.NewTracerProvider(opts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 	t.Cleanup(func() {
@@ -75,14 +81,12 @@ func installTracing(t *testing.T) *tracetest.SpanRecorder {
 	return rec
 }
 
-// TestLibraryTelemetryCarriesNoObjectPaths drives the driver through a
-// successful upload and failing reads, deletes and lookups, with and
-// without a caller span, and checks that the storage library neither
-// records a span that names the bucket, the object or the account, nor
-// sends trace context or the caller's baggage to Google.
-func TestLibraryTelemetryCarriesNoObjectPaths(t *testing.T) {
-	rec := installTracing(t)
-
+// driveGCS opens the driver against a fake GCS server and runs a successful
+// upload and failing lookups, reads and deletes, once under a caller span and
+// once with no span, both carrying baggage. It returns the fake, which
+// remembers each request's headers.
+func driveGCS(t *testing.T) *fakeGCS {
+	t.Helper()
 	fake := &fakeGCS{}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
@@ -98,6 +102,7 @@ func TestLibraryTelemetryCarriesNoObjectPaths(t *testing.T) {
 	base := baggage.ContextWithBaggage(context.Background(), bag)
 
 	parentCtx, parent := otel.Tracer("test").Start(base, "handle request")
+	defer parent.End()
 
 	for _, ctx := range []context.Context{parentCtx, base} {
 		_, err := drv.Put(ctx, leakBucket, leakKey, strings.NewReader("hello"))
@@ -111,7 +116,52 @@ func TestLibraryTelemetryCarriesNoObjectPaths(t *testing.T) {
 
 		require.Error(t, drv.Delete(ctx, leakBucket, leakKey))
 	}
-	parent.End()
+	return fake
+}
+
+// librarySpans returns the recorded spans the storage library started.
+func librarySpans(rec *tracetest.SpanRecorder) []sdktrace.ReadOnlySpan {
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.InstrumentationScope().Name != "test" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// leaks reports whether any recorded span names the bucket, the object or
+// the account anywhere: name, attributes, events or status.
+func leaks(rec *tracetest.SpanRecorder) []string {
+	var out []string
+	for _, s := range rec.Ended() {
+		for _, v := range []string{leakBucket, leakKey, leakEmail} {
+			if strings.Contains(s.Name(), v) || strings.Contains(s.Status().Description, v) {
+				out = append(out, s.Name()+": "+v)
+			}
+			for _, kv := range s.Attributes() {
+				if strings.Contains(kv.Value.String(), v) {
+					out = append(out, s.Name()+" attribute "+string(kv.Key)+": "+v)
+				}
+			}
+			for _, ev := range s.Events() {
+				for _, kv := range ev.Attributes {
+					if strings.Contains(kv.Value.String(), v) {
+						out = append(out, s.Name()+" event "+ev.Name+": "+v)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// TestLibraryTelemetryCarriesNoObjectPaths checks that under a parent-based
+// sampler the storage library records no span at all, and that no request
+// carries trace context or the caller's baggage to Google.
+func TestLibraryTelemetryCarriesNoObjectPaths(t *testing.T) {
+	rec := installTracing(t, nil)
+	fake := driveGCS(t)
 
 	headers := fake.seen()
 	require.NotEmpty(t, headers)
@@ -120,25 +170,65 @@ func TestLibraryTelemetryCarriesNoObjectPaths(t *testing.T) {
 		assert.Empty(t, h.Get("Traceparent"), "request %d carried a traceparent", i)
 	}
 
-	for _, s := range rec.Ended() {
-		assert.Equal(t, "test", s.InstrumentationScope().Name, "span %q from %s was recorded", s.Name(), s.InstrumentationScope().Name)
-		for _, v := range []string{leakBucket, leakKey, leakEmail} {
-			assert.NotContains(t, s.Name(), v)
-			assert.NotContains(t, s.Status().Description, v)
-			for _, kv := range s.Attributes() {
-				assert.NotContains(t, kv.Value.String(), v, "span %q attribute %s", s.Name(), kv.Key)
+	for _, s := range librarySpans(rec) {
+		t.Errorf("span %q from %s was recorded", s.Name(), s.InstrumentationScope().Name)
+	}
+	assert.Empty(t, leaks(rec))
+}
+
+// TestLibrarySpansUnderSamplersThatRecordThem is the control for the test
+// above, so it can't pass by the library simply opening no spans. Under a
+// sampler that ignores the parent the library's spans are sampled, and they
+// carry Google's error text. Under a sampler that records what it would
+// drop, as forge's does while the dashboard collects traces, they are
+// recorded too, unsampled. This is the residual the driver can't close: the
+// library starts its spans from the global provider. Requests still carry
+// no trace context or baggage in either case.
+func TestLibrarySpansUnderSamplersThatRecordThem(t *testing.T) {
+	cases := []struct {
+		name    string
+		sampler sdktrace.Sampler
+		sampled bool
+	}{
+		{"always_on", sdktrace.AlwaysSample(), true},
+		{"record only, like forge with the dashboard collecting", recordOnly{sdktrace.ParentBased(sdktrace.AlwaysSample())}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := installTracing(t, tc.sampler)
+			fake := driveGCS(t)
+
+			lib := librarySpans(rec)
+			require.NotEmpty(t, lib, "the storage library opened no spans")
+			for _, s := range lib {
+				assert.Equal(t, tc.sampled, s.SpanContext().IsSampled(), s.Name())
 			}
-			for _, ev := range s.Events() {
-				for _, kv := range ev.Attributes {
-					assert.NotContains(t, kv.Value.String(), v, "span %q event %s attribute %s", s.Name(), ev.Name, kv.Key)
-				}
+			assert.NotEmpty(t, leaks(rec), "the library's failed spans no longer quote Google's error")
+
+			for i, h := range fake.seen() {
+				assert.Empty(t, h.Get("Baggage"), "request %d carried baggage", i)
+				assert.Empty(t, h.Get("Traceparent"), "request %d carried a traceparent", i)
 			}
-		}
+		})
 	}
 }
 
+// recordOnly turns its inner sampler's Drop into RecordOnly, which is what
+// forge v1.12.9's sampler does while a span processor wants unsampled spans.
+type recordOnly struct{ inner sdktrace.Sampler }
+
+func (r recordOnly) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	res := r.inner.ShouldSample(p)
+	if res.Decision == sdktrace.Drop {
+		res.Decision = sdktrace.RecordOnly
+	}
+	return res
+}
+
+func (r recordOnly) Description() string { return "recordOnly{" + r.inner.Description() + "}" }
+
 func TestUntracedKeepsTheCallerTrace(t *testing.T) {
-	installTracing(t)
+	installTracing(t, nil)
 
 	ctx, span := otel.Tracer("test").Start(context.Background(), "parent")
 	defer span.End()

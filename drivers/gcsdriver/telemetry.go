@@ -22,18 +22,29 @@ import (
 // error as an exception event. Those messages quote the bucket and object
 // ("No such object: bucket/key") and sometimes the caller's account.
 //
-// So the library gets a span context that is valid but not sampled. A
-// parent-based sampler, which is forge's default and OpenTelemetry's, drops
-// every span started under it, and trove's own span for the operation
-// (started by the Trove facade, without names) stays the client span you
-// see. The caller's span is reused when there is one, so cancellation,
-// values and the trace ID carry over; a call with no span gets a random
-// unsampled one. Baggage is dropped as well: none of it is Google's.
+// So the library gets a span context that is valid but not sampled, and a
+// parent-based sampler (forge's default and OpenTelemetry's) decides not to
+// sample the spans started under it. The caller's span is reused when there
+// is one, so cancellation, values and the trace ID carry over; a call with no
+// span gets a random unsampled one. Baggage is dropped as well: none of it is
+// Google's. trove's own span for the operation, started by the Trove facade
+// without names, stays the client span you see.
 //
-// A sampler that ignores the parent (always_on, or a bare traceidratio)
-// samples the library's spans regardless. Their names are fixed and they
-// carry no attributes, but a failed call's status can then quote the bucket
-// and object.
+// Not sampled is not the same as not recorded, and two cases still record
+// the library's spans, error text included:
+//
+//   - A sampler that ignores the parent (always_on, or a bare traceidratio)
+//     samples them, and they are exported like any other span.
+//   - forge v1.12.9's sampler turns a Drop into RecordOnly while any span
+//     processor wants unsampled spans, and the dashboard's trace collector
+//     does whenever the dashboard extension is collecting. The spans are then
+//     recorded and handed to every processor. Batch exporters skip unsampled
+//     spans, so nothing goes out over OTLP, but the dashboard's Traces view
+//     stores them, with Google's message (bucket, object, sometimes the
+//     account) as the status and an exception event.
+//
+// Neither has a fix here. The library starts its spans from the global
+// tracer provider, not from anything the driver can hand it.
 func untraced(ctx context.Context) context.Context {
 	ctx = baggage.ContextWithoutBaggage(ctx)
 
