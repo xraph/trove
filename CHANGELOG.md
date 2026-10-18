@@ -15,7 +15,7 @@ All notable changes to Trove are documented in this file.
 - **Driver calls run without the caller's baggage**, so a client's `baggage` header never travels on to a storage provider or a scanner.
 - **The root requires `go.opentelemetry.io/otel` v1.45.0**, the version forge v1.12.9 and grove v1.8.0 pin. It still has no xraph dependencies.
 - **The drivers and the extension require the root at v1.8.0.**
-- **The extension needs forge v1.12.9, grove v1.8.0, chronicle v1.9.0, dispatch v1.9.1, vault v1.8.0 and warden v1.8.0.** Vault's `GetSecret` takes a tenant now; the encryption key provider asks for the app-level secret, as before.
+- **The extension needs forge v1.12.9, grove v1.8.0, chronicle v1.9.0, dispatch v1.9.1, vault v1.8.0 and warden v1.8.0.** Vault's `GetSecret` takes a tenant now and matches it exactly. The encryption key provider asks for the app-level secret (an empty tenant), which is where every secret written before vault v1.8.0 lives, so an existing key keeps working. A key stored under a tenant is not found, though: `Key` fails with vault's `ErrSecretNotFound` and encrypted reads and writes stop. If you stored `trove/data-encryption-key` under a tenant, store it again at app level (no tenant) before you upgrade.
 
 #### Fixed
 - **A DSN that fails to parse no longer puts its credentials in the error.** The message names the scheme and the kind of problem and nothing else. forge records a failed `Register`'s error on its lifecycle span, so the old message sent access keys and secrets to your trace backend.
