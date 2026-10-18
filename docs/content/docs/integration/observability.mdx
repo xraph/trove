@@ -1,0 +1,109 @@
+---
+title: "Observability"
+description: "The spans and metrics Trove records, how to wire them inside and outside Forge, and what never reaches them."
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Trove traces every storage operation and records a small set of metrics. Inside a Forge app you don't wire anything. forge installs the global OpenTelemetry tracer provider and the extension hands the app's metrics registry to every store it opens, so each call you make shows up as a span under the request that made it, and the counters and histograms show up on `/_/metrics` with forge's `forge_` prefix.
+
+Outside Forge, spans go to whatever global tracer provider you install with `otel.SetTracerProvider`. Metrics need one option:
+
+```go
+t, err := trove.Open(drv,
+	trove.WithMetrics(myRecorder), // an observe.Recorder
+	trove.WithCAS(cas.AlgSHA256),  // the CAS records on the same Recorder
+)
+```
+
+`observe.Recorder` has two methods, `Add` for counters and `Observe` for histograms, and the root module depends on no metrics framework. `observe.Metrics()` lists every metric with its kind, label keys and buckets, so your adapter can declare them all up front. The extension's adapter is `hooks.NewMetrics(app.Metrics())` in `extension/hooks`, about fifty lines, if you want something to copy. A CAS you build yourself takes `cas.WithMetrics(r)`.
+
+## Spans
+
+Every span comes from the tracer `github.com/xraph/trove`.
+
+| Span | Kind | Attributes |
+|---|---|---|
+| `put object` | Client, or Internal for `mem` and `local` | `trove.driver`, `trove.operation`, `trove.result`, `trove.object.size` |
+| `get object` | same | same |
+| `head object` | same | same |
+| `copy object` | same | same |
+| `delete object` | same | `trove.driver`, `trove.operation`, `trove.result` |
+| `list objects` | same | same |
+| `create bucket` | same | same |
+| `delete bucket` | same | same |
+| `list buckets` | same | same |
+| `apply write middleware` | Internal | `trove.middleware.count`, `trove.middleware.names` |
+| `scan object` | Client | `trove.scan.result` (`clean`, `infected`, `error`), `trove.object.size` |
+| `store cas object` | Internal | `trove.cas.algorithm`, `trove.cas.deduplicated`, `trove.driver`, `trove.object.size` |
+| `collect cas garbage` | Internal | `trove.cas.algorithm`, `trove.driver`, `trove.cas.gc.scanned`, `trove.cas.gc.deleted`, `trove.cas.gc.freed_bytes`, `trove.cas.gc.errors` |
+
+`trove.driver` is one of `mem`, `local`, `s3`, `gcs`, `azure`, `sftp` or `other`. A custom driver records as `other`, whatever its `Name` returns, and gets a Client span because it almost certainly talks to something remote. `trove.operation` is `put`, `get`, `delete`, `head`, `list`, `copy`, `create_bucket`, `delete_bucket` or `list_buckets`. `trove.object.size` is the size the driver reported.
+
+Each operation span is a child of whatever span your context carries, so a `Put` you make from a handler lands inside that request's trace. The write middleware span sits under `put object`, and `scan object` under that. `collect cas garbage` hangs off whatever asked for the run, which is the dashboard request when you press the button and your job's span when a job calls `GC`.
+
+A `get object` span ends when `Get` returns. Mind you, that means it covers the driver's request and the response headers and none of the time you spend reading the body, so if you stream a 2 GB file to a browser, don't read the download time off this span. We could wrap the body and end the span on `Close`. That hides the local driver's `*os.File` from `io.Copy` and you'd lose its sendfile path, so we didn't.
+
+### Failures
+
+A failed span gets an error status whose description is the error's class, and one `exception` event carrying only `exception.type`. The class is a sentinel's name when the error wraps one (`trove.ErrPermissionDenied`, `trove.ErrQuotaExceeded`, `trove.ErrContentBlocked`, `context.DeadlineExceeded`) and the Go type of the innermost error otherwise. The error's message is never recorded, because driver errors quote the bucket and the key.
+
+A missing object isn't a failure. When you `Head` a key that doesn't exist, or `Get` from a bucket that was never created, the span keeps an unset status and `trove.result` says `not_found`, the same answer your code gets from `errors.Is(err, trove.ErrNotFound)`. A `CreateBucket` for a bucket that already exists says `exists`. An infected upload isn't a failed `scan object` span either: the scanner did its job, and the `apply write middleware` span above it carries `trove.ErrContentBlocked`. A garbage collection run that couldn't delete some entries counts them in `trove.cas.gc.errors` and stays unset. Only a failure to list the candidates fails it.
+
+## Metrics
+
+| Metric (scraped name) | Type | Labels |
+|---|---|---|
+| `forge_trove_operation_duration_seconds` | histogram | `driver`, `operation`, `result` |
+| `forge_trove_object_bytes_total` | counter | `driver`, `direction` |
+| `forge_trove_scans_total` | counter | `result` |
+| `forge_trove_cas_stores_total` | counter | `result` |
+| `forge_trove_cas_gc_deleted_total` | counter | none |
+| `forge_trove_cas_gc_freed_bytes_total` | counter | none |
+
+The names Trove records are the same without `forge_`, so a Recorder of your own sees `trove_operation_duration_seconds`.
+
+| Label | Values |
+|---|---|
+| `driver` | `mem`, `local`, `s3`, `gcs`, `azure`, `sftp`, `other` |
+| `operation` | `put`, `get`, `delete`, `head`, `list`, `copy`, `create_bucket`, `delete_bucket`, `list_buckets` |
+| `result` on the duration | `ok`, `not_found`, `exists`, `error` |
+| `direction` | `write`: what the driver stored on `Put`, after write middleware. `read`: the stored size of each object `Get` returned, before read middleware, not the bytes you went on to read |
+| `result` on scans | `clean`, `infected`, `error`, `skipped` (passed through for its extension or its size) |
+| `result` on CAS stores | `stored`, `deduplicated`, `error` |
+
+The duration buckets run from half a millisecond to five minutes: `0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300`.
+
+With several stores, every store adds to the same series. There's no store label, on purpose: you name stores, and anything you name can't be a label.
+
+```text
+# p95 put latency per driver
+histogram_quantile(0.95, sum by (le, driver) (rate(forge_trove_operation_duration_seconds_bucket{operation="put"}[5m])))
+
+# share of failed operations
+sum(rate(forge_trove_operation_duration_seconds_count{result="error"}[5m]))
+  / sum(rate(forge_trove_operation_duration_seconds_count[5m]))
+
+# uploads that went unscanned
+rate(forge_trove_scans_total{result="skipped"}[1h])
+```
+
+The streaming pool's `PoolMetrics` and a stream's `Metrics()` are in-process counters you read from Go. Nothing exports them.
+
+## What never reaches a span or a label
+
+Bucket names, object keys, CAS content hashes, content, signed URLs, presign results, dashboard tickets, DSNs, credentials and error text. Bucket names count because the [multi-tenancy guide](/docs/concepts/multi-tenancy) suggests a bucket per tenant. Metric labels are the fixed values above and nothing else.
+
+Every driver call runs on the operation's context with its baggage removed. forge copies the client's `baggage` header into the request context, and a driver whose client propagated trace context would forward it to your storage provider. The scan middleware drops it before it calls the scanner too.
+
+A DSN that doesn't parse fails with an error that names only the scheme and the kind of problem. forge records a failed `Register`'s error text on its lifecycle span, so this matters even for a typo.
+
+<Callout type="info">
+The GCS driver opens Google's client with `option.WithTelemetryDisabled`, so the client no longer records each request's URL (bucket and object path included) or sends your trace context and baggage to Google. The storage library still opens spans of its own from the global provider, and on a failure those record Google's error message, which quotes the bucket and object. The driver runs every library call under an unsampled copy of your span, so a parent-based sampler (forge's default) drops them. If you configure a sampler that ignores the parent, such as `always_on`, those library spans are exported again.
+</Callout>
+
+## Things forge records that Trove can't change
+
+forge's lifecycle spans record a failed `Register` or `Start` error's full text. Trove's own errors are safe there now, but an error from another extension or a dependency may not be.
+
+forge's server spans record `url.full`, query string included. The dashboard's download and preview links carry their ticket in `?t=`, so a ticket reaches your trace backend, not just the dashboard's Traces view. Each one is read-only and lives 60 seconds. Upload tickets go in a header and never appear in a URL.

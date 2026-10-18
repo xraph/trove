@@ -122,6 +122,7 @@ type RetryPolicy struct {
 | `WithScopedReadMiddleware(scope, mws...)`, `WithScopedWriteMiddleware(scope, mws...)` | Scoped, one direction |
 | `WithMiddlewareAt(priority int, mws ...middleware.Middleware)` | Global middleware at a priority (lower runs first) |
 | `WithCAS(alg cas.HashAlgorithm)` | Turn on content-addressable storage over the primary driver |
+| `WithMetrics(r observe.Recorder)` | Record operation, scan and CAS metrics on `r`. Nil, the default, records nothing |
 
 ### Errors
 
@@ -462,9 +463,37 @@ func (c *CAS) Bucket() string // "cas" by default
 | `GCResult` | `Scanned`, `Deleted`, `FreedBytes`, `Errors` |
 | `Index` | `Get`, `Put`, `Delete`, `IncrementRef`, `DecrementRef`, `Pin`, `Unpin`, `ListUnpinned` |
 | `MemoryIndex` | The default index, from `NewMemoryIndex()` |
-| Options | `WithAlgorithm(alg)`, `WithBucket(name)`, `WithIndex(idx)` |
+| Options | `WithAlgorithm(alg)`, `WithBucket(name)`, `WithIndex(idx)`, `WithMetrics(r)` |
 
 Nothing in Trove calls `DecrementRef`, so `GC` has nothing to collect unless you lower counts yourself.
+
+---
+
+## Observe Package
+
+**Import:** `github.com/xraph/trove/observe`
+
+The metrics Trove records and the interface it records them on. It imports only the standard library.
+
+```go
+type Recorder interface {
+	Add(name string, delta float64, labelValues ...string)     // counters
+	Observe(name string, value float64, labelValues ...string) // histograms
+}
+
+type Metric struct {
+	Name    string
+	Kind    Kind // KindCounter or KindHistogram
+	Help    string
+	Unit    string // "s", "By" or ""
+	Labels  []string
+	Buckets []float64
+}
+
+func Metrics() []Metric // every metric, as fresh copies
+```
+
+The package also exports the metric names (`MetricOperationDuration` and the rest), the label keys and every label value as constants. A Recorder gets label values in the order the metric declares its keys, must be safe for concurrent use, and should ignore a name it doesn't know. The [observability page](/docs/integration/observability) lists the metrics and spans.
 
 ---
 

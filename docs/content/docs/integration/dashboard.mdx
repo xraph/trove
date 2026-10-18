@@ -105,7 +105,7 @@ Object bytes never travel inside the contract envelope. They go through the cont
 | Preview | 60 seconds | the `?t=` query parameter |
 | Upload | 15 minutes | the `X-Trove-Ticket` header |
 
-Downloads ride in the query string because a plain `<a download>` can't send a header. Uploads use the header, and a PUT that carries `?t=` is refused. The split exists because Forge's dashboard tracing records query strings, so a download ticket can show up in the Traces view for its 60 seconds of life. It's read-only and short, which is why we accepted that.
+Downloads ride in the query string because a plain `<a download>` can't send a header. Uploads use the header, and a PUT that carries `?t=` is refused. The split exists because forge's server spans record `url.full`, query string included. A download ticket therefore shows up in the Traces view and, once you export traces, in your trace backend too. It's read-only and dies after 60 seconds, which is why we accepted that.
 
 The route always answers with `Content-Disposition: attachment`, so a browser saves what it gets and never renders it. The preview fetches the bytes from script and draws them itself. The plugin never shows bytes inline from the route. `disable_routes` doesn't turn the content route off.
 

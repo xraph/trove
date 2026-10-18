@@ -207,7 +207,7 @@ s, _ := t.Stream(ctx, "bucket", "key", stream.DirectionUpload,
 
 ## Metrics
 
-Both pools and individual streams expose real-time metrics:
+Both pools and individual streams expose real-time metrics. These are in-process counters you read from Go; nothing exports them. The metrics Trove does export are on the [observability page](/docs/integration/observability).
 
 ### Pool Metrics
 

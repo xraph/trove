@@ -1,6 +1,6 @@
 ---
 title: "Ecosystem Integration"
-description: "Hooks for Chronicle audit, Vault encryption, Dispatch jobs, Warden access control, and metrics."
+description: "Hooks for Chronicle audit, Vault encryption, Dispatch jobs, Warden access control, and the metrics adapter."
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
@@ -98,4 +98,6 @@ The subject comes from a request header. Unless something upstream sets `X-Subje
 
 ## Metrics
 
-`hooks.NewMetricsHook(app, logger)` and its `Record*` methods exist, and the package names the metrics it plans to report (`trove_objects_total`, `trove_driver_latency_seconds`, `trove_cas_dedup_hits_total` and so on). They don't record anything yet: `RegisterMetrics` only logs a line, and every `Record*` method is an empty stub. For storage metrics today, wrap the driver or add your own middleware.
+Metrics are the one thing here the extension does wire for you. `Register` calls `hooks.NewMetrics(app.Metrics())` and passes the result to every store through `trove.WithMetrics`, so storage operations, scans and CAS activity land on `/_/metrics` as `forge_trove_*` series. `hooks.Metrics` is an `observe.Recorder`; build one yourself only when you open a `trove.Trove` outside the extension and want it on the same registry.
+
+The [observability page](/docs/integration/observability) lists every metric and span. The old `NewMetricsHook` stub, which named metrics and recorded nothing, is gone.

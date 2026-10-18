@@ -4,6 +4,29 @@ All notable changes to Trove are documented in this file.
 
 ## [Unreleased]
 
+### Telemetry
+
+#### Added
+- **A span for every storage operation.** `put object`, `get object`, `head object`, `copy object`, `delete object`, `list objects`, `create bucket`, `delete bucket` and `list buckets`, each with `trove.driver`, `trove.operation`, `trove.result` and the object size where there is one. Remote drivers get Client spans, `mem` and `local` Internal ones. The write middleware, the scan middleware, CAS stores and CAS garbage collection get spans of their own. They go to the global tracer provider, which a Forge app installs, so inside Forge you see them without doing anything.
+- **Metrics through `trove.WithMetrics(observe.Recorder)`.** `trove_operation_duration_seconds`, `trove_object_bytes_total`, `trove_scans_total`, `trove_cas_stores_total`, `trove_cas_gc_deleted_total` and `trove_cas_gc_freed_bytes_total`. Package `observe` declares them with their labels and buckets and has no dependencies; `cas.WithMetrics` does the same for a CAS you build yourself.
+- **The extension records them on the app's registry.** They scrape as `forge_trove_*`. Every store shares one set of series, with no store, bucket or tenant label.
+
+#### Changed
+- **Driver calls run without the caller's baggage**, so a client's `baggage` header never travels on to a storage provider or a scanner.
+- **The root requires `go.opentelemetry.io/otel` v1.45.0**, the version forge v1.12.9 and grove v1.8.0 pin. It still has no xraph dependencies.
+- **The drivers and the extension require the root at v1.8.0.**
+- **The extension needs forge v1.12.9, grove v1.8.0, chronicle v1.9.0, dispatch v1.9.1, vault v1.8.0 and warden v1.8.0.** Vault's `GetSecret` takes a tenant now; the encryption key provider asks for the app-level secret, as before.
+
+#### Fixed
+- **A DSN that fails to parse no longer puts its credentials in the error.** The message names the scheme and the kind of problem and nothing else. forge records a failed `Register`'s error on its lifecycle span, so the old message sent access keys and secrets to your trace backend.
+- **`gcsdriver` keeps object paths and your trace context away from Google's telemetry.** It opens the client with `option.WithTelemetryDisabled` and runs the storage library under an unsampled span, so neither the library's HTTP spans nor its own record bucket and object names, and no `traceparent` or `baggage` header goes to Google.
+- **A failed upload through write middleware no longer strands a goroutine.** `Put` closes the pipe once the driver returns, so the middleware goroutine stops instead of blocking on its next write forever.
+
+#### Removed
+- **`hooks.MetricsHook`, `hooks.NewMetricsHook`, its `Metric*` constants and its `Record*` methods.** They recorded nothing. `hooks.NewMetrics` is the working replacement, and the extension wires it for you.
+
+---
+
 ### Dashboard
 
 #### Added
