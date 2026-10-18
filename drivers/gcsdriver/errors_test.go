@@ -1,9 +1,12 @@
 package gcsdriver
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"cloud.google.com/go/storage"
@@ -54,6 +57,9 @@ func TestClassifyErr(t *testing.T) {
 		{"403 quotaExceeded", gapi(http.StatusForbidden, "quotaExceeded"), "b", "k", driver.ErrQuotaExceeded},
 
 		// Everything else stays unclassified so the caller wraps it as opaque.
+		// A 409 outside CreateBucket is a delete of a bucket that still holds
+		// objects, not an existing bucket.
+		{"409", gapi(http.StatusConflict, "conflict"), "b", "", nil},
 		{"500", gapi(http.StatusInternalServerError), "b", "k", nil},
 		{"plain error", errors.New("connection reset"), "b", "k", nil},
 		{"nil", nil, "b", "k", nil},
@@ -83,4 +89,35 @@ func TestClassifyErr(t *testing.T) {
 // not-found, only a typed one is.
 func TestClassifyErrIgnoresMessageText(t *testing.T) {
 	assert.NoError(t, classifyErr(errors.New("object doesn't exist, probably"), "b", "k"))
+}
+
+func TestClassifyCreateBucketErr(t *testing.T) {
+	err := classifyCreateBucketErr(gapi(http.StatusConflict, "conflict"), "b")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, driver.ErrBucketExists)
+
+	// Everything else falls through to classifyErr.
+	assert.ErrorIs(t, classifyCreateBucketErr(gapi(http.StatusForbidden), "b"), driver.ErrPermissionDenied)
+	assert.NoError(t, classifyCreateBucketErr(gapi(http.StatusInternalServerError), "b"))
+}
+
+// TestCreateBucketReportsAnExistingBucket drives CreateBucket against a
+// server that answers the way GCS does for a bucket you already own, so a
+// store's startup CreateBucket records "exists" and not a failure.
+func TestCreateBucketReportsAnExistingBucket(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, `{"error":{"code":409,"message":"Your previous request to create the named bucket succeeded and you already own it.","errors":[{"reason":"conflict"}]}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := New()
+	require.NoError(t, drv.Open(context.Background(), "gcs://proj/b?endpoint="+srv.URL+"/storage/v1/"))
+	t.Cleanup(func() { _ = drv.Close(context.Background()) })
+
+	err := drv.CreateBucket(context.Background(), "b")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, driver.ErrBucketExists)
 }

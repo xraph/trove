@@ -369,7 +369,7 @@ func (d *GCSDriver) CreateBucket(ctx context.Context, name string, _ ...driver.B
 	}
 
 	if err := client.Bucket(name).Create(ctx, cfg.ProjectID, attrs); err != nil {
-		if cErr := classifyErr(err, name, ""); cErr != nil {
+		if cErr := classifyCreateBucketErr(err, name); cErr != nil {
 			return cErr
 		}
 		return fmt.Errorf("gcsdriver: create bucket %q: %w", name, err)
