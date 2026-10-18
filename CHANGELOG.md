@@ -24,7 +24,7 @@ All notable changes to Trove are documented in this file.
 - **A failed upload through write middleware no longer strands a goroutine.** `Put` closes the pipe once the driver returns, so the middleware goroutine stops instead of blocking on its next write forever.
 
 #### Removed
-- **`hooks.MetricsHook`, `hooks.NewMetricsHook`, its `Metric*` constants and its `Record*` methods.** They recorded nothing. `hooks.NewMetrics` is the working replacement, and the extension wires it for you.
+- **`hooks.MetricsHook`, `hooks.NewMetricsHook`, `RegisterMetrics`, the `RecordObjectCreated`, `RecordDriverLatency`, `RecordDriverError` and `RecordCASDedup` methods, and the fourteen `Metric*` constants (`MetricObjectsTotal` through `MetricQuotaLimitBytes`).** They recorded nothing. `hooks.NewMetrics` is the working replacement, and the extension wires it for you.
 
 ---
 
