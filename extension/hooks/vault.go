@@ -57,7 +57,10 @@ type vaultKeyProvider struct {
 
 // Key retrieves the encryption key from Vault.
 func (p *vaultKeyProvider) Key(ctx context.Context) ([]byte, error) {
-	secret, err := p.store.GetSecret(ctx, p.key, p.appID)
+	// The data encryption key is an app-level secret, so the tenant is
+	// empty. Vault v1.8.0 matches the tenant exactly and reads "" as the
+	// app-level secret, which is what every earlier version stored.
+	secret, err := p.store.GetSecret(ctx, p.key, p.appID, "")
 	if err != nil {
 		return nil, fmt.Errorf("vault: get encryption key: %w", err)
 	}

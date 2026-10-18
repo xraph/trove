@@ -58,6 +58,19 @@ func classifyErr(err error, bucket, key string) error {
 	return nil
 }
 
+// classifyCreateBucketErr is classifyErr for CreateBucket, plus the one
+// mapping only a create can make: GCS answers 409 Conflict when the bucket
+// already exists, whether you own it or someone else does. classifyErr can't
+// map 409 on its own, because DeleteBucket on a bucket that still holds
+// objects is a 409 as well, and that bucket doesn't "already exist".
+func classifyCreateBucketErr(err error, bucket string) error {
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) && apiErr.Code == http.StatusConflict {
+		return fmt.Errorf("gcsdriver: bucket %q already exists: %w", bucket, driver.ErrBucketExists)
+	}
+	return classifyErr(err, bucket, "")
+}
+
 // isQuotaReason reports whether a 403 was raised for exceeding a quota or
 // rate limit rather than for lacking permission.
 func isQuotaReason(apiErr *googleapi.Error) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/xraph/forge/extensions/dashboard/contract"
+	"go.opentelemetry.io/otel/baggage"
 
 	"github.com/xraph/trove/cas"
 	"github.com/xraph/trove/driver"
@@ -104,7 +105,10 @@ func casListHandler(deps Deps) func(context.Context, casListInput, contract.Prin
 			opts = append(opts, driver.WithCursor(token))
 		}
 		out := casListOutput{Entries: []casEntryRow{}}
-		it, err := st.Trove.Driver().List(ctx, c.Bucket(), opts...)
+		// The CAS writes to the default driver, so it is listed there and
+		// not through the facade's routing. That call gets no trove span;
+		// it does drop the caller's baggage, like every facade call.
+		it, err := st.Trove.Driver().List(baggage.ContextWithoutBaggage(ctx), c.Bucket(), opts...)
 		if errors.Is(err, driver.ErrBucketNotFound) {
 			// The extension never creates the CAS bucket; until something
 			// is stored there is nothing to list.

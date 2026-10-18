@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/xraph/forge/extensions/dashboard/contract"
+	"go.opentelemetry.io/otel/baggage"
 
 	"github.com/xraph/trove/driver"
 )
@@ -93,7 +94,9 @@ func bucketsDeleteHandler(deps Deps) func(context.Context, bucketInput, contract
 		if err != nil {
 			return bucketNameOutput{}, err
 		}
-		it, err := st.Trove.Driver().List(ctx, in.Name, driver.WithMaxKeys(1), driver.WithDelimiter("/"))
+		// DeleteBucket goes to the default driver, so the emptiness check
+		// asks the same one. No trove span, and no baggage for the driver.
+		it, err := st.Trove.Driver().List(baggage.ContextWithoutBaggage(ctx), in.Name, driver.WithMaxKeys(1), driver.WithDelimiter("/"))
 		if err != nil {
 			return bucketNameOutput{}, deps.mapError("buckets.delete", err)
 		}

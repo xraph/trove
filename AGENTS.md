@@ -101,7 +101,8 @@ There are no database-backed tests. The extension's Postgres, SQLite and Mongo m
 | `vfs/` | a directory-shaped filesystem view over object keys |
 | `stream/` | the streaming engine: chunks, pools, backpressure |
 | `id/` | TypeID identifiers |
-| `internal/` | checksums and the key router |
+| `observe/` | the metric definitions and the `Recorder` interface the root records them on |
+| `internal/` | checksums, the key router, `telemetry` (tracer, span names, error classes) and `telemetrytest` (span and metric recorders for tests) |
 | `trovetest/` | `RunDriverSuite` (driver conformance), a mock driver, fixtures |
 | `extension/` | the Forge extension module: `model/`, `store/{memory,postgres,sqlite,mongo}`, `migrate/`, `handler/` (REST), `hooks/`, `contract/` (dashboard contract with `manifest.yaml`), `manager.go` (multi-store) |
 | `bench/` | benchmarks behind the `bench` tag |
@@ -133,7 +134,13 @@ The root module has no logger. The extension logs through `github.com/xraph/go-u
 
 `extension.New(opts...)` embeds `*forge.BaseExtension`. `Register` loads config from `extensions.trove`, then `trove`. It resolves a store from the named grove database (`WithGroveDatabase`), or from any `*grove.DB` in the vessel container, and runs migrations right there in `Register` unless `DisableMigrate` is set. It mounts no REST routes: `registerRoutes` is an empty placeholder, so `base_path` (default `/trove`) and `WithBasePath` are parsed but nothing reads them. The handlers in `extension/handler` are a plain `http.Handler` you build with `handler.New` and mount yourself. The one route the extension serves is the dashboard content route, at `dashboard_content_path` (default `/dashboard/trove/content`). With one store it provides `*trove.Trove`. Configure several stores and it also provides a `*TroveManager` and each store by name.
 
-`extension/hooks` holds the Chronicle, Dispatch, Vault and Warden integrations, plus a metrics hook that registers through the Forge app's metrics registry. Each of the four service hooks looks its service up in the vessel container, and its constructor returns nil (with a debug log) when the service isn't registered, so an app without Warden, say, still starts.
+`extension/hooks` holds the Chronicle, Dispatch, Vault and Warden integrations, plus `hooks.Metrics`, the `observe.Recorder` that declares Trove's metrics on the Forge app's registry. Register builds one and passes it to every store with `trove.WithMetrics`; the four service hooks you still wire yourself. Each of them looks its service up in the vessel container, and its constructor returns nil (with a debug log) when the service isn't registered, so an app without Warden, say, still starts.
+
+### Telemetry
+
+Spans come from `internal/telemetry` under the tracer `github.com/xraph/trove`, from the global provider. Metrics go through `observe.Recorder`, a two-method interface with no dependencies, because dispatch and fabriq import the root and it must stay free of xraph modules and metrics frameworks. `observe.Metrics()` is the one list of names, label keys and buckets; add a metric there and every adapter picks it up.
+
+The rules the tests hold you to: no bucket, key, content hash, content, signed URL, ticket, DSN, credential or error text on a span, an event, a status or a label. A failed span gets `telemetry.Fail`, which records the error's class (a sentinel name or a Go type) and never its message, because driver errors quote the bucket and key. Driver calls run on `telemetry.DriverContext(ctx)`, which drops baggage. Label values are the enums in `observe`, and an unknown driver name maps to `other`. `docs/content/docs/integration/observability.mdx` lists every span and metric; keep it in step.
 
 ### Lint and tests
 
@@ -153,7 +160,7 @@ Commits use conventional commits with a scope, for example `fix(extension): ...`
 
 ## Dependencies
 
-The root module has no xraph dependencies, and the only xraph module the drivers depend on is the root. `extension` depends on `github.com/xraph/chronicle`, `dispatch`, `vault`, `warden`, `grove` (with `mongodriver`, `pgdriver` and `sqlitedriver`), `forge`, `go-utils` and `vessel`. See each `go.mod` for versions.
+The root module has no xraph dependencies, and the only xraph module the drivers depend on is the root. The root does depend on the OpenTelemetry API (`go.opentelemetry.io/otel` at the version forge pins), for its spans. `extension` depends on `github.com/xraph/chronicle`, `dispatch`, `vault`, `warden`, `grove` (with `mongodriver`, `pgdriver` and `sqlitedriver`), `forge`, `go-utils` and `vessel`. See each `go.mod` for versions.
 
 Dispatch and fabriq depend on the trove root, and `cortex/inttest` pulls it in indirectly.
 

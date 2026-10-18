@@ -268,4 +268,6 @@ The extension resolves a Grove database from DI for its metadata store:
 
 ## Ecosystem hooks
 
-`extension/hooks` has helpers for Chronicle (`NewChronicleHook`), Vault (`NewVaultHook`, whose `KeyProvider` feeds the encrypt middleware), Warden (`NewWardenHook`, an HTTP middleware), Dispatch (`NewDispatchHook`, which registers cleanup and CAS GC jobs) and metrics (`NewMetricsHook`). The extension doesn't discover or wire any of them. You create and call them yourself.
+`extension/hooks` has helpers for Chronicle (`NewChronicleHook`), Vault (`NewVaultHook`, whose `KeyProvider` feeds the encrypt middleware), Warden (`NewWardenHook`, an HTTP middleware) and Dispatch (`NewDispatchHook`, which registers cleanup and CAS GC jobs). The extension doesn't discover or wire any of them. You create and call them yourself.
+
+Metrics are different. `Register` builds `hooks.NewMetrics(app.Metrics())` once and hands it to every store, so you get the `forge_trove_*` series without doing anything. Spans need nothing either: they go to the tracer provider forge installs. See [observability](/docs/integration/observability).

@@ -4,6 +4,30 @@ All notable changes to Trove are documented in this file.
 
 ## [Unreleased]
 
+### Telemetry
+
+#### Added
+- **A span for every storage operation.** `put object`, `get object`, `head object`, `copy object`, `delete object`, `list objects`, `create bucket`, `delete bucket` and `list buckets`, each with `trove.driver`, `trove.operation`, `trove.result` and the object size where there is one. Remote drivers get Client spans, `mem` and `local` Internal ones. The write middleware, the scan middleware, CAS stores and CAS garbage collection get spans of their own. They go to the global tracer provider, which a Forge app installs, so inside Forge you see them without doing anything.
+- **Metrics through `trove.WithMetrics(observe.Recorder)`.** `trove_operation_duration_seconds`, `trove_object_bytes_total`, `trove_scans_total`, `trove_cas_stores_total`, `trove_cas_gc_deleted_total` and `trove_cas_gc_freed_bytes_total`. Package `observe` declares them with their labels and buckets and has no dependencies; `cas.WithMetrics` does the same for a CAS you build yourself.
+- **The extension records them on the app's registry.** They scrape as `forge_trove_*`. Every store shares one set of series, with no store, bucket or tenant label.
+
+#### Changed
+- **Driver calls run without the caller's baggage**, so a client's `baggage` header never travels on to a storage provider or a scanner.
+- **The root requires `go.opentelemetry.io/otel` v1.45.0**, the version forge v1.12.9 and grove v1.8.0 pin. It still has no xraph dependencies.
+- **The drivers and the extension require the root at v1.8.0.**
+- **The extension needs forge v1.12.9, grove v1.8.0, chronicle v1.9.0, dispatch v1.9.1, vault v1.8.0 and warden v1.8.0.** Vault's `GetSecret` takes a tenant now and matches it exactly. The encryption key provider asks for the app-level secret (an empty tenant), which is where every secret written before vault v1.8.0 lives, so an existing key keeps working. A key stored under a tenant is not found, though: `Key` fails with vault's `ErrSecretNotFound` and encrypted reads and writes stop. If you stored `trove/data-encryption-key` under a tenant, store it again at app level (no tenant) before you upgrade.
+
+#### Fixed
+- **A DSN that fails to parse no longer puts its credentials in the error.** The message names the scheme and the kind of problem and nothing else. forge records a failed `Register`'s error on its lifecycle span, so the old message sent access keys and secrets to your trace backend.
+- **`gcsdriver` keeps object paths and your trace context away from Google's telemetry.** It opens the client with `option.WithTelemetryDisabled`, so there's no HTTP span recording `url.full` and no `traceparent` or `baggage` header goes to Google, and it runs the storage library under an unsampled span, so a parent-based sampler won't sample the library's own spans. Those spans are still recorded, with Google's error text (bucket, object, sometimes the account), under a sampler that ignores the parent, and in the forge dashboard's Traces view while it collects; forge's sampler records unsampled spans for it. Nothing reaches OTLP in that second case.
+- **`gcsdriver` reports an existing bucket as `ErrBucketExists`.** GCS answers 409 to a create for a bucket that already exists, and the driver passed it through unclassified, so a GCS store's startup `CreateBucket` recorded `result="error"` on every boot. Only CreateBucket maps 409; a delete of a bucket that still holds objects is also a 409 and stays unclassified.
+- **A failed upload through write middleware no longer strands a goroutine.** `Put` closes the pipe once the driver returns, so the middleware goroutine stops instead of blocking on its next write forever.
+
+#### Removed
+- **`hooks.MetricsHook`, `hooks.NewMetricsHook`, `RegisterMetrics`, the `RecordObjectCreated`, `RecordDriverLatency`, `RecordDriverError` and `RecordCASDedup` methods, and the fourteen `Metric*` constants (`MetricObjectsTotal` through `MetricQuotaLimitBytes`).** They recorded nothing. `hooks.NewMetrics` is the working replacement, and the extension wires it for you.
+
+---
+
 ### Dashboard
 
 #### Added

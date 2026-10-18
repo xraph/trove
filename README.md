@@ -116,6 +116,7 @@ If you've written an upload service, you've probably written the same wrapper tw
 | Hot and cold storage in one app | Routing rules that send keys to named backends by glob pattern or function |
 | Deduplicated content | Content-addressable storage keyed by SHA-256, BLAKE3 or XXHash, with pinning and GC |
 | A filesystem view | `Stat`, `ReadDir`, `Walk`, `Open`, `Create` and `Rename` over a bucket, plus an `io/fs.FS` adapter for `http.FileServer` |
+| To see what storage is doing | An OpenTelemetry span per operation and six metrics, with no keys, bucket names or error text on either |
 
 The [architecture guide](https://www.xraph.com/docs/trove/architecture) shows how the facade, the router, the middleware resolver and the drivers fit together.
 
@@ -260,6 +261,8 @@ If the container holds a `*grove.DB` (from the [Grove](https://github.com/xraph/
 
 The REST handlers in `extension/handler` (buckets, objects, multipart uploads, CAS) form a plain `http.Handler` that you build with `handler.New` and mount yourself. Integrations with [Chronicle](https://github.com/xraph/chronicle), [Vault](https://github.com/xraph/vault), [Warden](https://github.com/xraph/warden) and [Dispatch](https://github.com/xraph/dispatch) are in `extension/hooks`, and you wire those yourself too.
 
+Telemetry needs no wiring. Every storage operation records a span under your request's span, and the extension puts `forge_trove_operation_duration_seconds`, `forge_trove_object_bytes_total` and the scan and CAS counters on `/_/metrics`. Outside Forge, pass an `observe.Recorder` to `trove.WithMetrics`. The [observability page](https://www.xraph.com/docs/trove/integration/observability) lists every span and metric.
+
 ### Configuration
 
 The extension reads `extensions.trove` from your Forge config, then falls back to a top-level `trove` key. YAML wins for string fields, and a `true` you set in code turns a flag on even when YAML leaves it off.
@@ -299,6 +302,7 @@ extensions:
 | Upload large files | [Streaming uploads](https://www.xraph.com/docs/trove/guides/streaming-uploads) |
 | Handle errors and tenants | [Errors](https://www.xraph.com/docs/trove/concepts/errors), [multi-tenancy](https://www.xraph.com/docs/trove/concepts/multi-tenancy) |
 | Run it inside Forge | [Forge extension](https://www.xraph.com/docs/trove/integration/forge-extension), [Grove store](https://www.xraph.com/docs/trove/integration/grove-store), [dashboard](https://www.xraph.com/docs/trove/integration/dashboard) |
+| Trace and measure it | [Observability](https://www.xraph.com/docs/trove/integration/observability) |
 
 The exported Go API is on [pkg.go.dev](https://pkg.go.dev/github.com/xraph/trove), and the docs source is in [`docs/`](docs/).
 

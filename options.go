@@ -3,6 +3,7 @@ package trove
 import (
 	"github.com/xraph/trove/driver"
 	"github.com/xraph/trove/internal"
+	"github.com/xraph/trove/observe"
 	"github.com/xraph/trove/stream"
 )
 
@@ -105,6 +106,21 @@ func WithPoolConfig(cfg stream.PoolConfig) Option {
 func WithVFS(bucket string) Option {
 	return func(t *Trove) error {
 		t.vfsBucket = bucket
+		return nil
+	}
+}
+
+// WithMetrics records Trove's metrics on r: the duration of every facade
+// operation, object bytes through Put and Get, scans by the scan middleware
+// and, when CAS is enabled, CAS stores and garbage collection. Package
+// observe lists each metric with its labels. A nil r, the default, records
+// nothing.
+//
+// Spans need no option. They go to the global OpenTelemetry tracer
+// provider, which a Forge app installs.
+func WithMetrics(r observe.Recorder) Option {
+	return func(t *Trove) error {
+		t.metrics = r
 		return nil
 	}
 }

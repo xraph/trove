@@ -55,10 +55,12 @@ trove/
 │   └── compat.go         # io/fs.FS compatibility adapter
 ├── id/                   # TypeID-based identifiers
 │   └── id.go             # ID type, prefixes (obj_, bkt_, str_, chk_, ...), Parse, New
+├── observe/              # Metric definitions and the Recorder interface (no deps)
 ├── trovetest/            # Conformance test suite for driver implementations
 ├── internal/             # Internal utilities (router, checksum)
 │   ├── router.go         # Multi-backend router (pattern + function routing)
-│   └── checksum.go       # SHA-256, BLAKE3, XXHash hashing helpers
+│   ├── checksum.go       # SHA-256, BLAKE3, XXHash hashing helpers
+│   └── telemetry/        # Tracer, span names, error classes shared by every package
 └── extension/            # Forge extension for DI and lifecycle integration
 ```
 
@@ -92,6 +94,8 @@ User Code
            drv.Put(ctx, bucket, key, reader, opts...)
            Backend-specific storage (filesystem, S3, GCS, ...)
 ```
+
+In code the router runs first, because the operation's span names the driver that serves it. The `put object` span opens there, the middleware runs under it, and the driver call gets the span's context with the caller's baggage removed. [Observability](/docs/integration/observability) lists every span.
 
 On the `Get` (read) path, data flows from the driver through the read middleware before it reaches the caller. The read pipeline runs in the same priority order as the write pipeline, not the reverse, so two byte-transforming middleware (compress and encrypt) don't round-trip today. See [Middleware](/docs/storage/middleware).
 

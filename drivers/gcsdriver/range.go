@@ -11,6 +11,8 @@ import (
 // byte position and length is the number of bytes to read. A length of -1
 // reads from offset to end.
 func (d *GCSDriver) GetRange(ctx context.Context, bucket, key string, offset, length int64) (*driver.ObjectReader, error) {
+	ctx = untraced(ctx)
+
 	client, _, err := d.getClient()
 	if err != nil {
 		return nil, err

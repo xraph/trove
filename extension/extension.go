@@ -14,6 +14,7 @@ import (
 	_ "github.com/xraph/trove/drivers/localdriver" // register "file" and "local" schemes
 	"github.com/xraph/trove/drivers/memdriver"
 	trovecontract "github.com/xraph/trove/extension/contract"
+	"github.com/xraph/trove/extension/hooks"
 	"github.com/xraph/trove/extension/store"
 	mongostore "github.com/xraph/trove/extension/store/mongo"
 	pgstore "github.com/xraph/trove/extension/store/postgres"
@@ -56,6 +57,11 @@ type Extension struct {
 	// Dashboard contract state, built at the end of Register.
 	dashStores  *trovecontract.Stores
 	dashContent *trovecontract.Content
+
+	// metrics records every store's metrics on the app's registry. It is
+	// built once in Register and shared, so the stores add to the same
+	// series rather than declaring them again.
+	metrics *hooks.Metrics
 }
 
 // New creates a new Trove extension.
@@ -74,6 +80,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
 	}
+	e.metrics = hooks.NewMetrics(e.Metrics())
 
 	if err := e.loadConfiguration(); err != nil {
 		return err
@@ -483,6 +490,7 @@ func (e *Extension) buildStoreFromGroveDB(db *grove.DB) (store.Store, error) {
 func (e *Extension) buildTrove() error {
 	// Build options from config.
 	opts := e.config.ToTroveOptions()
+	opts = append(opts, e.metricsOptions()...)
 	opts = append(opts, e.troveOpts...)
 
 	// Add middleware from config flags.
@@ -607,6 +615,7 @@ func (e *Extension) buildTroveOptsForEntry(entry fileStoreEntry) []trove.Option 
 		bucket = "default"
 	}
 	opts = append(opts, trove.WithDefaultBucket(bucket))
+	opts = append(opts, e.metricsOptions()...)
 
 	if entry.enableCompress {
 		opts = append(opts, trove.WithMiddleware(compress.New()))
@@ -619,6 +628,16 @@ func (e *Extension) buildTroveOptsForEntry(entry fileStoreEntry) []trove.Option 
 	opts = append(opts, e.troveOpts...)
 
 	return opts
+}
+
+// metricsOptions records a store's metrics on the app's registry. It comes
+// before the caller's own options, so a trove.WithMetrics passed through
+// WithTroveOption replaces it.
+func (e *Extension) metricsOptions() []trove.Option {
+	if e.metrics == nil {
+		return nil
+	}
+	return []trove.Option{trove.WithMetrics(e.metrics)}
 }
 
 // resolveDefaultStoreName determines the default store name.

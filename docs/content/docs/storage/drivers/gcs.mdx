@@ -5,6 +5,8 @@ description: "Google Cloud Storage driver with multipart uploads, pre-signed URL
 
 The GCS driver stores objects in Google Cloud Storage. It implements the core `driver.Driver` interface plus `MultipartDriver`, `PresignDriver`, and `RangeDriver` capability interfaces.
 
+It opens Google's client with `option.WithTelemetryDisabled`, and runs each library call under an unsampled copy of your span with your baggage removed. Google's client would otherwise record every bucket and object path on its own spans and forward your trace context to Google. The storage library's own spans can still be recorded, with Google's error text, under a sampler that ignores the parent or while forge's dashboard collects traces; the [observability page](/docs/integration/observability) explains both.
+
 ## Installation
 
 The GCS driver has its own Go module to isolate the Google Cloud SDK dependency:

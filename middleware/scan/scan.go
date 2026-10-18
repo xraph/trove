@@ -11,8 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/xraph/trove"
+	"github.com/xraph/trove/internal/telemetry"
 	"github.com/xraph/trove/middleware"
+	"github.com/xraph/trove/observe"
 )
 
 // Compile-time interface checks.
@@ -104,6 +108,11 @@ func (s *Scan) Direction() middleware.Direction { return middleware.DirectionWri
 // WrapWriter wraps a writer to scan content before it reaches the driver.
 // Data is buffered, scanned on Close(), and blocked with ErrContentBlocked
 // if a threat is detected.
+//
+// Each scan records a "scan object" client span (a scanner such as ClamAV
+// is a separate service) with the result and the size scanned, and counts
+// trove_scans_total on the Recorder of the Trove that runs the middleware.
+// The span carries neither the key nor the threat name.
 func (s *Scan) WrapWriter(ctx context.Context, w io.WriteCloser, key string) (io.WriteCloser, error) {
 	if s.provider == nil {
 		return w, nil
@@ -111,6 +120,7 @@ func (s *Scan) WrapWriter(ctx context.Context, w io.WriteCloser, key string) (io
 
 	// Skip based on file extension.
 	if s.shouldSkip(key) {
+		telemetry.Add(telemetry.RecorderFrom(ctx), observe.MetricScans, 1, observe.ScanSkipped)
 		return w, nil
 	}
 
@@ -143,9 +153,11 @@ func (w *scanWriter) Write(p []byte) (int, error) {
 
 func (w *scanWriter) Close() error {
 	data := w.buf.Bytes()
+	metrics := telemetry.RecorderFrom(w.ctx)
 
 	// Skip scanning if content exceeds max size.
 	if w.scan.maxSize > 0 && int64(len(data)) > w.scan.maxSize {
+		telemetry.Add(metrics, observe.MetricScans, 1, observe.ScanSkipped)
 		if _, err := w.inner.Write(data); err != nil {
 			return err
 		}
@@ -153,9 +165,15 @@ func (w *scanWriter) Close() error {
 	}
 
 	// Scan the buffered content.
-	result, err := w.scan.provider.Scan(w.ctx, bytes.NewReader(data))
+	result, err := w.scanContent(data)
 	if err != nil {
+		telemetry.Add(metrics, observe.MetricScans, 1, observe.ScanError)
 		return err
+	}
+	if result.Clean {
+		telemetry.Add(metrics, observe.MetricScans, 1, observe.ScanClean)
+	} else {
+		telemetry.Add(metrics, observe.MetricScans, 1, observe.ScanInfected)
 	}
 
 	if !result.Clean {
@@ -171,4 +189,29 @@ func (w *scanWriter) Close() error {
 		return err
 	}
 	return w.inner.Close()
+}
+
+// scanContent runs the provider over data inside a "scan object" span.
+func (w *scanWriter) scanContent(data []byte) (*Result, error) {
+	ctx, span := telemetry.Start(w.ctx, telemetry.SpanScanObject, trace.SpanKindClient,
+		telemetry.AttrObjectSize.Int(len(data)),
+	)
+	defer span.End()
+
+	// The scanner is a third party: none of the caller's baggage is its.
+	result, err := w.scan.provider.Scan(telemetry.DriverContext(ctx), bytes.NewReader(data))
+	switch {
+	case err != nil:
+		span.SetAttributes(telemetry.AttrScanResult.String(observe.ScanError))
+		telemetry.Fail(span, err)
+		return nil, err
+	case result.Clean:
+		span.SetAttributes(telemetry.AttrScanResult.String(observe.ScanClean))
+	default:
+		// An infected upload is the scanner doing its job, not a failed
+		// span. The "apply write middleware" span above it carries
+		// trove.ErrContentBlocked.
+		span.SetAttributes(telemetry.AttrScanResult.String(observe.ScanInfected))
+	}
+	return result, nil
 }
