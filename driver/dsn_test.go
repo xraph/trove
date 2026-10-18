@@ -36,6 +36,8 @@ func TestParseDSN_ErrorsCarryNoCredentials(t *testing.T) {
 		secret    = "wJalrXUtnFEMI"
 		account   = "acctsecretname"
 		accKey    = "c2VjcmV0LWFjY291bnQta2V5"
+		connStr   = "DefaultEndpointsProtocol=https;AccountName=" + account + ";AccountKey=" + accKey + ";EndpointSuffix=core.windows.net"
+		sasToken  = "sv=2024-11-04&sig=c2FzLXNpZ25hdHVyZQ"
 	)
 
 	cases := []struct {
@@ -64,6 +66,16 @@ func TestParseDSN_ErrorsCarryNoCredentials(t *testing.T) {
 			want: `driver: parse DSN for scheme "azure": net/url: invalid control character in URL`,
 		},
 		{
+			name: "connection string, with a bad port in front of it",
+			dsn:  "azure://" + account + ":10o00/container?connection_string=" + connStr,
+			want: `driver: parse DSN for scheme "azure": invalid port`,
+		},
+		{
+			name: "connection string with a control character",
+			dsn:  "azure://" + account + "/container?connection_string=" + connStr + ";SharedAccessSignature=" + sasToken + "\x00",
+			want: `driver: parse DSN for scheme "azure": net/url: invalid control character in URL`,
+		},
+		{
 			name: "missing scheme",
 			dsn:  "//" + accessKey + ":" + secret + "@us-east-1/bucket",
 			want: "driver: DSN missing scheme",
@@ -85,7 +97,7 @@ func TestParseDSN_ErrorsCarryNoCredentials(t *testing.T) {
 			_, err := driver.ParseDSN(tc.dsn)
 			require.Error(t, err)
 			assert.Equal(t, tc.want, err.Error())
-			for _, s := range []string{accessKey, strings.ToLower(accessKey), secret, account, accKey} {
+			for _, s := range []string{accessKey, strings.ToLower(accessKey), secret, account, accKey, "c2FzLXNpZ25hdHVyZQ", "AccountKey"} {
 				assert.NotContains(t, err.Error(), s)
 			}
 		})
