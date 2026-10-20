@@ -5,12 +5,12 @@ go 1.26.0
 require (
 	github.com/xraph/chronicle v1.9.0
 	github.com/xraph/dispatch v1.9.1
-	github.com/xraph/forge v1.12.9
+	github.com/xraph/forge v1.12.10
 	github.com/xraph/go-utils v1.4.1
-	github.com/xraph/grove v1.8.0
-	github.com/xraph/grove/drivers/mongodriver v1.8.0
-	github.com/xraph/grove/drivers/pgdriver v1.8.0
-	github.com/xraph/grove/drivers/sqlitedriver v1.8.0
+	github.com/xraph/grove v1.9.0
+	github.com/xraph/grove/drivers/mongodriver v1.9.0
+	github.com/xraph/grove/drivers/pgdriver v1.9.0
+	github.com/xraph/grove/drivers/sqlitedriver v1.9.0
 	github.com/xraph/trove v1.8.0
 	github.com/xraph/vault v1.8.0
 	github.com/xraph/vessel v1.0.4
