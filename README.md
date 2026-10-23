@@ -342,6 +342,6 @@ The `extension`, `gcsdriver` and `sftpdriver` modules need Go 1.26. The driver i
 
 ## License
 
-See the [Trove repository](https://github.com/xraph/trove) for license terms.
+MIT. See [LICENSE](LICENSE).
 
 Built by [Rex Raphael](https://github.com/juicycleff) and [contributors](https://github.com/xraph/trove/graphs/contributors), as part of the [Forge](https://github.com/xraph/forge) forgery stack.
