@@ -37,6 +37,8 @@ jobs:
       # vulncheck job below, which reports stdlib findings and blocks only on
       # reachable third-party ones.
       govulncheck-fail-on-findings: false
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   # ─── Vulnerability Gate ───────────────────────────────────────────────
   # govulncheck resolves imports per module, so the shared workflow's scan of
