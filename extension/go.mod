@@ -4,12 +4,12 @@ go 1.26.0
 
 require (
 	github.com/xraph/chronicle v1.11.0
-	github.com/xraph/dispatch v1.9.1
+	github.com/xraph/dispatch v1.9.4
 	github.com/xraph/forge v1.12.10
 	github.com/xraph/go-utils v1.5.0
-	github.com/xraph/grove v1.9.0
+	github.com/xraph/grove v1.10.2
 	github.com/xraph/grove/drivers/mongodriver v1.9.0
-	github.com/xraph/grove/drivers/pgdriver v1.9.0
+	github.com/xraph/grove/drivers/pgdriver v1.10.2
 	github.com/xraph/grove/drivers/sqlitedriver v1.9.0
 	github.com/xraph/trove v1.8.0
 	github.com/xraph/vault v1.8.0
@@ -76,8 +76,8 @@ require (
 	github.com/hashicorp/serf v0.10.4 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.11.0 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jackc/pgx/v5 v5.12.0 // indirect
+	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
