@@ -5,15 +5,15 @@ go 1.26.0
 require (
 	github.com/xraph/chronicle v1.11.0
 	github.com/xraph/dispatch v1.9.4
-	github.com/xraph/forge v1.12.10
-	github.com/xraph/go-utils v1.5.0
+	github.com/xraph/forge v1.14.0
+	github.com/xraph/go-utils v1.5.1
 	github.com/xraph/grove v1.10.2
 	github.com/xraph/grove/drivers/mongodriver v1.9.0
 	github.com/xraph/grove/drivers/pgdriver v1.10.2
 	github.com/xraph/grove/drivers/sqlitedriver v1.9.0
 	github.com/xraph/trove v1.8.0
 	github.com/xraph/vault v1.8.0
-	github.com/xraph/vessel v1.0.4
+	github.com/xraph/vessel v1.0.7
 	github.com/xraph/warden v1.8.0
 	go.mongodb.org/mongo-driver/v2 v2.9.1
 	go.opentelemetry.io/otel v1.47.0
@@ -34,7 +34,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
@@ -111,11 +111,13 @@ require (
 	go.jetify.com/typeid/v2 v2.0.0-alpha.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.21.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.45.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/sdk/log v0.21.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
